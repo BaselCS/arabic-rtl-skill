@@ -58,7 +58,7 @@ cdef void init_arabic_bitmap() noexcept nogil:
         bit_idx = ch & 7
         ARABIC_BITMAP[byte_idx] |= (1 << bit_idx)
 
-    for ch in range(0x08A0, 0x0900):  # Arabic Extended-A
+    for ch in range(0x0870, 0x0900):  # Arabic Extended-A & Extended-B
         byte_idx = ch >> 3
         bit_idx = ch & 7
         ARABIC_BITMAP[byte_idx] |= (1 << bit_idx)
@@ -138,21 +138,36 @@ def has_arabic(str text):
 # Split text into chunks and process in parallel
 # ══════════════════════════════════════════════════════════════
 
-cdef list split_lines(list lines, int num_chunks):
-    """Split lines into roughly equal chunks."""
+cdef list split_lines(list lines, int num_chunks, bint smart_mode=True):
+    """Split lines into roughly equal chunks, respecting code block boundaries."""
     cdef Py_ssize_t n = len(lines)
-    # Bug fix #4: cap num_chunks to n so chunk_size never becomes 0
     if n > 0 and num_chunks > n:
         num_chunks = n
-    cdef Py_ssize_t chunk_size = n // num_chunks if num_chunks > 0 else n
+    if num_chunks <= 1 or n == 0:
+        return [lines]
+    cdef Py_ssize_t target_chunk_size = n // num_chunks
     cdef list chunks = []
     cdef Py_ssize_t start = 0
+    cdef Py_ssize_t i = 0
+    cdef bint in_code_block = False
+    cdef str stripped
 
-    for i in range(num_chunks - 1):
-        end = start + chunk_size
-        chunks.append(lines[start:end])
-        start = end
-    chunks.append(lines[start:])  # Last chunk gets remainder
+    for i in range(n):
+        if smart_mode:
+            stripped = lines[i].strip()
+            if in_code_block:
+                if "```" in stripped:
+                    in_code_block = False
+            else:
+                if stripped.startswith("```") and stripped.count("```") % 2 != 0:
+                    in_code_block = True
+
+        if not in_code_block and (i - start + 1) >= target_chunk_size and len(chunks) < num_chunks - 1:
+            chunks.append(lines[start:i + 1])
+            start = i + 1
+
+    if start < n:
+        chunks.append(lines[start:])
     return chunks
 
 
@@ -161,7 +176,7 @@ def _process_chunk(tuple args):
     cdef list chunk = args[0]
     cdef bint smart_mode = args[1]
     if smart_mode:
-        return [_smart_process_line(line) for line in chunk]
+        return process_text('\n'.join(chunk), smart_mode=True).split('\n')
     else:
         return [_process_line_normal(line) for line in chunk]
 
@@ -185,7 +200,7 @@ def process_text_parallel(str text, int num_threads=4, bint smart_mode=True):
         return process_text(text, smart_mode)
 
     # Split into chunks (like 1BRC's get_parts function)
-    chunks = split_lines(lines, num_threads)
+    chunks = split_lines(lines, num_threads, smart_mode)
     chunk_args = [(chunk, smart_mode) for chunk in chunks]
 
     # Process in parallel (bypasses GIL)
@@ -218,9 +233,13 @@ def process_file_parallel(str filepath, int num_threads=4, str output=None, bint
 
         # Read file (mmap for large files)
         if file_size > 1_000_000:
-            with open(filepath, 'rb') as f:
-                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                    raw = mm[:]
+            try:
+                with open(filepath, 'rb') as f:
+                    with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                        raw = mm[:]
+            except (OSError, ValueError):
+                with open(filepath, 'rb') as f:
+                    raw = f.read()
         else:
             with open(filepath, 'rb') as f:
                 raw = f.read()
@@ -240,8 +259,11 @@ def process_file_parallel(str filepath, int num_threads=4, str output=None, bint
 
     # Output
     if output:
-        with open(output, 'w', encoding='utf-8') as f:
-            f.write(result)
+        try:
+            with open(output, 'w', encoding='utf-8') as f:
+                f.write(result)
+        except OSError as e:
+            print(f"Error: Could not write output file '{output}': {e}", file=sys.stderr)
     else:
         print(result)
 
@@ -260,16 +282,222 @@ def process_file_parallel(str filepath, int num_threads=4, str output=None, bint
 # SMART MODE: Auto-skip non-Arabic content
 # ══════════════════════════════════════════════════════════════
 
+cdef str _reverse_arabic_word(str word):
+    """
+    Reverse an Arabic word preserving Tashkeel (diacritics) on their base chars
+    and keeping digit sequences (ASCII 0-9, Arabic ٠-٩, Persian ۰-۹) in LTR order.
+    """
+    if not word:
+        return word
+
+    cdef list sub_tokens = []
+    cdef str curr_type = ""
+    cdef list curr_token = []
+    cdef unsigned int cp
+    cdef bint is_dig, is_diac
+
+    for ch in word:
+        cp = <unsigned int>ord(ch)
+        is_dig = (48 <= cp <= 57) or (0x0660 <= cp <= 0x0669) or (0x06F0 <= cp <= 0x06F9)
+        is_diac = (0x064B <= cp <= 0x065F) or cp == 0x0670 or (0x06D6 <= cp <= 0x06ED) or (0x08E3 <= cp <= 0x08FF) or (0x0610 <= cp <= 0x061A)
+
+        if is_dig:
+            if curr_type == "digit":
+                curr_token.append(ch)
+            else:
+                if curr_token:
+                    sub_tokens.append((curr_type, curr_token))
+                curr_type = "digit"
+                curr_token = [ch]
+        elif is_diac and curr_type == "letter" and curr_token:
+            last_idx = len(curr_token) - 1
+            curr_token[last_idx] = curr_token[last_idx] + ch
+        else:
+            if curr_type == "letter":
+                curr_token.append(ch)
+            else:
+                if curr_token:
+                    sub_tokens.append((curr_type, curr_token))
+                curr_type = "letter"
+                curr_token = [ch]
+
+    if curr_token:
+        sub_tokens.append((curr_type, curr_token))
+
+    cdef list res_tokens = []
+    for t_type, t_content in sub_tokens:
+        if t_type == "digit":
+            res_tokens.append("".join(t_content))
+        else:
+            t_content.reverse()
+            res_tokens.append("".join(t_content))
+    
+    res_tokens.reverse()
+    return "".join(res_tokens)
+
+
+cdef dict BRACKET_PAIRS = {
+    '(': ')', ')': '(',
+    '[': ']', ']': '[',
+    '{': '}', '}': '{',
+    '<': '>', '>': '<',
+    '«': '»', '»': '«',
+    '‹': '›', '›': '‹',
+    '（': '）', '）': '（',
+    '﴿': '﴾', '﴾': '﴿',
+    '“': '”', '”': '“',
+    '‘': '’', '’': '‘',
+    '⦅': '⦆', '⦆': '⦅',
+    '⟦': '⟧', '⟧': '⟦',
+    '⟨': '⟩', '⟩': '⟨',
+    '【': '】', '】': '【',
+    '〔': '〕', '〕': '〔',
+    '〖': '〗', '〗': '〖',
+    '⁅': '⁆', '⁆': '⁅',
+}
+
+cdef Py_ssize_t _scan_ansi_escape(str line, Py_ssize_t i, Py_ssize_t length):
+    """Scan ANSI escape sequence starting at index i. Returns length of sequence or 0."""
+    if i >= length or (line[i] != '\x1b' and line[i] != '\033'):
+        return 0
+    if i + 1 >= length:
+        return 1
+    cdef str next_ch = line[i + 1]
+    cdef Py_ssize_t end
+    cdef unsigned int cp
+    if next_ch == '[':
+        end = i + 2
+        while end < length:
+            cp = <unsigned int>ord(line[end])
+            if 0x20 <= cp <= 0x3F:
+                end += 1
+            else:
+                break
+        if end < length:
+            cp = <unsigned int>ord(line[end])
+            if 0x40 <= cp <= 0x7E:
+                end += 1
+        return end - i
+    elif next_ch in (']', 'P', '^', '_'):
+        end = i + 2
+        while end < length:
+            if line[end] == '\x07':
+                end += 1
+                break
+            if _starts_with(line, "\x1b\\", end) or _starts_with(line, "\033\\", end):
+                end += 2
+                break
+            end += 1
+        return end - i
+    else:
+        end = i + 1
+        while end < length:
+            cp = <unsigned int>ord(line[end])
+            if 0x20 <= cp <= 0x2F:
+                end += 1
+            else:
+                break
+        if end < length:
+            cp = <unsigned int>ord(line[end])
+            if 0x30 <= cp <= 0x7E:
+                end += 1
+        return end - i
+
+cdef bint _is_path_start(str line, Py_ssize_t i, Py_ssize_t length):
+    """Check if position i starts a file path or URL."""
+    if (_starts_with(line, "http://", i) or _starts_with(line, "https://", i) or
+        _starts_with(line, "ftp://", i) or _starts_with(line, "file://", i) or
+        _starts_with(line, "mailto:", i) or _starts_with(line, "git@", i) or
+        _starts_with(line, "ssh://", i) or _starts_with(line, "ws://", i) or
+        _starts_with(line, "wss://", i) or _starts_with(line, "sftp://", i) or
+        _starts_with(line, "git://", i) or _starts_with(line, "svn://", i)):
+        return True
+    if (i == 0 or line[i-1] in (' ', '\t', '"', "'", '(', '[', '<', '=', ':', 'm', 'M', ';', 'g')):
+        if (_starts_with(line, "/", i) or _starts_with(line, "~/", i) or
+            _starts_with(line, "./", i) or _starts_with(line, "../", i) or
+            _starts_with(line, "$", i) or _starts_with(line, "%", i)):
+            if line[i] == '/' and (i + 1 >= length or line[i+1] in (' ', '\t', '\n', '\r')):
+                return False
+            return True
+        if i + 2 < length and line[i+1] == ':' and line[i+2] in ('\\', '/'):
+            if ('A' <= line[i] <= 'Z') or ('a' <= line[i] <= 'z'):
+                return True
+        if _starts_with(line, ".\\", i) or _starts_with(line, "..\\", i):
+            return True
+    return False
+
+cdef str _reverse_segment(str segment):
+    """Reverse an Arabic segment preserving words, numbers, and mirroring brackets."""
+    cdef list tokens = []
+    cdef Py_ssize_t seg_i = 0
+    cdef Py_ssize_t seg_len = len(segment)
+    cdef Py_ssize_t start
+    cdef unsigned int cp, c
+    cdef bint is_digit
+    cdef str ch, word
+
+    while seg_i < seg_len:
+        ch = segment[seg_i]
+        if ch == ' ':
+            start = seg_i
+            while seg_i < seg_len and segment[seg_i] == ' ':
+                seg_i += 1
+            tokens.append(segment[start:seg_i])
+        elif ch in BRACKET_PAIRS:
+            tokens.append(BRACKET_PAIRS[ch])
+            seg_i += 1
+        else:
+            start = seg_i
+            cp = <unsigned int>ord(ch)
+            is_digit = (48 <= cp <= 57) or (0x0660 <= cp <= 0x0669) or (0x06F0 <= cp <= 0x06F9)
+            if is_digit:
+                while seg_i < seg_len:
+                    c = <unsigned int>ord(segment[seg_i])
+                    if (48 <= c <= 57) or (0x0660 <= c <= 0x0669) or (0x06F0 <= c <= 0x06F9):
+                        seg_i += 1
+                    else:
+                        break
+                tokens.append(segment[start:seg_i])
+            elif cp in (0x060C, 0x061B, 0x061F, 0x066A, 0x066B, 0x066C):
+                tokens.append(ch)
+                seg_i += 1
+            elif is_arabic_fast(cp):
+                while seg_i < seg_len and segment[seg_i] not in (' ', '\n', '\r') and segment[seg_i] not in BRACKET_PAIRS:
+                    c = <unsigned int>ord(segment[seg_i])
+                    if (48 <= c <= 57) or (0x0660 <= c <= 0x0669) or (0x06F0 <= c <= 0x06F9) or c in (0x060C, 0x061B, 0x061F, 0x066A, 0x066B, 0x066C):
+                        break
+                    seg_i += 1
+                word = segment[start:seg_i]
+                tokens.append(_reverse_arabic_word(word))
+            else:
+                while seg_i < seg_len and segment[seg_i] not in (' ', '\n', '\r') and segment[seg_i] not in BRACKET_PAIRS:
+                    c = <unsigned int>ord(segment[seg_i])
+                    if is_arabic_fast(c):
+                        break
+                    seg_i += 1
+                tokens.append(segment[start:seg_i])
+
+    tokens.reverse()
+    return "".join(tokens)
+
 cdef str _smart_process_line(str line):
-    """Process a line, skipping code blocks, URLs, paths, commands."""
+    """Process a line, skipping code blocks, URLs, paths, commands, and ANSI escape sequences."""
     cdef Py_ssize_t length = len(line)
     cdef Py_ssize_t i = 0
+    cdef Py_ssize_t end
     cdef str result = ""
     cdef str segment
-    cdef Py_ssize_t seg_i, seg_len, word_start, seg_start, seg_end, last_arabic_i
-    cdef unsigned int ch
+    cdef Py_ssize_t seg_start, seg_end, last_arabic_i, ansi_len
+    cdef unsigned int ch, prev_ch
 
     while i < length:
+        # Skip ANSI escape sequences
+        ansi_len = _scan_ansi_escape(line, i, length)
+        if ansi_len > 0:
+            result += line[i:i+ansi_len]
+            i += ansi_len
+            continue
+
         # Skip code blocks (``` ... ```)
         if _starts_with(line, "```", i):
             end = line.find("```", i + 3)
@@ -292,69 +520,47 @@ cdef str _smart_process_line(str line):
                 i = end + 1
                 continue
 
-        # Skip URLs
-        if _starts_with(line, "http://", i) or _starts_with(line, "https://", i) or _starts_with(line, "ftp://", i):
+        # Skip URLs and File paths
+        if _is_path_start(line, i, length):
             end = i
-            while end < length and line[end] not in (' ', '\t', '\n', '\r', ')', ']', '>'):
+            while end < length and line[end] not in (' ', '\t', '\n', '\r', '"', "'", ')', ']', '>'):
                 end += 1
             result += line[i:end]
             i = end
             continue
-
-        # Skip file paths (starting with / or ~/)
-        if (i == 0 or line[i-1] == ' ') and (_starts_with(line, "/", i) or _starts_with(line, "~/", i)):
-            end = i
-            while end < length and line[end] not in (' ', '\t', '\n', '\r'):
-                end += 1
-            result += line[i:end]
-            i = end
-            continue
-
-        # Skip shell commands ($ or # at start)
-        if i == 0 and line[i] in ('$', '#'):
-            result += line[i:]
-            return result
 
         # Process this character normally
         ch = <unsigned int>ord(line[i])
         if is_arabic_fast(ch):
-            # Find Arabic segment
+            # Find Arabic segment boundary
             seg_start = i
             last_arabic_i = i
             while i < length:
                 ch = <unsigned int>ord(line[i])
                 if is_arabic_fast(ch):
                     last_arabic_i = i
-                elif ch != 0x20:
+                    i += 1
+                elif _scan_ansi_escape(line, i, length) > 0 or _is_path_start(line, i, length) or _starts_with(line, "```", i) or line[i] == '`':
                     break
-                i += 1
-            seg_end = last_arabic_i + 1
-            i = seg_end
-            # Reverse the Arabic segment preserving whitespace exactly
-            segment = line[seg_start:seg_end]
-            rev_words = []
-            
-            seg_i = 0
-            seg_len = len(segment)
-            
-            while seg_i < seg_len:
-                if segment[seg_i] == ' ':
-                    word_start = seg_i
-                    while seg_i < seg_len and segment[seg_i] == ' ':
-                        seg_i += 1
-                    rev_words.append(segment[word_start:seg_i])
+                elif line[i] in ('\n', '\r'):
+                    break
                 else:
-                    word_start = seg_i
-                    while seg_i < seg_len and segment[seg_i] != ' ':
-                        seg_i += 1
-                    word = segment[word_start:seg_i]
-                    if len(word) > 1:
-                        rev_words.append(word[::-1])
-                    else:
-                        rev_words.append(word)
-            
-            rev_words.reverse()
-            result += ''.join(rev_words)
+                    i += 1
+            seg_end = i
+            while seg_end > last_arabic_i + 1:
+                prev_ch = <unsigned int>ord(line[seg_end - 1])
+                if line[seg_end - 1] in (' ', '\t'):
+                    seg_end -= 1
+                elif line[seg_end - 1] in BRACKET_PAIRS or line[seg_end - 1] in ('.', ',', '!', '?', ':', ';', '-'):
+                    break
+                elif (48 <= prev_ch <= 57) or (0x0660 <= prev_ch <= 0x0669) or (0x06F0 <= prev_ch <= 0x06F9):
+                    break
+                else:
+                    seg_end -= 1
+
+            i = seg_end
+            segment = line[seg_start:seg_end]
+            result += _reverse_segment(segment)
         else:
             result += line[i]
             i += 1
@@ -381,49 +587,32 @@ cdef str _process_line_normal(str line):
     cdef Py_ssize_t i = 0
     cdef str result = ""
     cdef str segment
-    cdef Py_ssize_t seg_i, seg_len, word_start, seg_start, seg_end, last_arabic_i
+    cdef Py_ssize_t seg_start, seg_end, last_arabic_i, ansi_len
     cdef unsigned int ch
 
     while i < length:
+        # Skip ANSI escape sequences
+        ansi_len = _scan_ansi_escape(line, i, length)
+        if ansi_len > 0:
+            result += line[i:i+ansi_len]
+            i += ansi_len
+            continue
+
         ch = <unsigned int>ord(line[i])
         if is_arabic_fast(ch):
-            # Find Arabic segment
             seg_start = i
             last_arabic_i = i
             while i < length:
                 ch = <unsigned int>ord(line[i])
                 if is_arabic_fast(ch):
                     last_arabic_i = i
-                elif ch != 0x20:
+                elif _scan_ansi_escape(line, i, length) > 0 or line[i] in ('\n', '\r'):
                     break
                 i += 1
             seg_end = last_arabic_i + 1
             i = seg_end
-            # Reverse the Arabic segment preserving whitespace exactly
             segment = line[seg_start:seg_end]
-            rev_words = []
-            
-            seg_i = 0
-            seg_len = len(segment)
-            
-            while seg_i < seg_len:
-                if segment[seg_i] == ' ':
-                    word_start = seg_i
-                    while seg_i < seg_len and segment[seg_i] == ' ':
-                        seg_i += 1
-                    rev_words.append(segment[word_start:seg_i])
-                else:
-                    word_start = seg_i
-                    while seg_i < seg_len and segment[seg_i] != ' ':
-                        seg_i += 1
-                    word = segment[word_start:seg_i]
-                    if len(word) > 1:
-                        rev_words.append(word[::-1])
-                    else:
-                        rev_words.append(word)
-            
-            rev_words.reverse()
-            result += ''.join(rev_words)
+            result += _reverse_segment(segment)
         else:
             result += line[i]
             i += 1
@@ -435,12 +624,27 @@ def process_text(str text, bint smart_mode=True):
     """
     Process Arabic prose.
     If smart_mode is True, auto-skips code blocks, URLs, paths, commands.
+    Tracks multiline code blocks across lines.
     """
     cdef list lines = text.split('\n')
     cdef list out = []
+    cdef bint in_code_block = False
+    cdef str line, stripped
+
     for line in lines:
         if smart_mode:
-            out.append(_smart_process_line(line))
+            stripped = line.strip()
+            if in_code_block:
+                out.append(line)
+                if "```" in stripped:
+                    in_code_block = False
+            else:
+                if stripped.startswith("```"):
+                    out.append(_smart_process_line(line))
+                    if stripped.count("```") % 2 != 0:
+                        in_code_block = True
+                else:
+                    out.append(_smart_process_line(line))
         else:
             out.append(_process_line_normal(line))
     return '\n'.join(out)
@@ -448,4 +652,5 @@ def process_text(str text, bint smart_mode=True):
 
 # Alias for backward compatibility & README matching
 reverse_arabic_text = process_text
+
 

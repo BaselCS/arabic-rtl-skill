@@ -34,6 +34,7 @@ Issues = "https://github.com/baselCS/arabic-rtl-processor/issues"
 
 [project.scripts]
 arabic-rtl = "arabic_rtl_cli:main"
+arabic-rtl-daemon = "arabic_rtl_daemon:main"
 
 [tool.setuptools]
-py-modules = ["arabic_rtl_cli"]
+py-modules = ["arabic_rtl_cli", "arabic_rtl_daemon"]

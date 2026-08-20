@@ -21,39 +21,48 @@ esac
 echo "Detected OS: ${MACHINE}"
 echo ""
 
-# Find Python
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Find Python / uv
 PYTHON=""
-for cmd in python3 python; do
-    if command -v "$cmd" &> /dev/null; then
-        version=$("$cmd" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+')
-        major=$(echo "$version" | cut -d. -f1)
-        minor=$(echo "$version" | cut -d. -f2)
-        if [ "$major" -ge 3 ] && [ "$minor" -ge 10 ]; then
-            PYTHON="$cmd"
-            break
+if [ -f "${SCRIPT_DIR}/.venv/bin/python" ]; then
+    PYTHON="${SCRIPT_DIR}/.venv/bin/python"
+elif command -v uv &> /dev/null; then
+    PYTHON="uv run --directory ${SCRIPT_DIR} python"
+else
+    for cmd in python3 python; do
+        if command -v "$cmd" &> /dev/null; then
+            version=$("$cmd" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+')
+            major=$(echo "$version" | cut -d. -f1)
+            minor=$(echo "$version" | cut -d. -f2)
+            if [ "$major" -ge 3 ] && [ "$minor" -ge 10 ]; then
+                PYTHON="$cmd"
+                break
+            fi
         fi
-    fi
-done
+    done
+fi
 
 if [ -z "$PYTHON" ]; then
-    echo "❌ Python 3.10+ not found. Please install Python first."
+    echo "❌ Python 3.10+ or uv not found. Please install Python or uv first."
     exit 1
 fi
 
 echo "Using Python: $($PYTHON --version)"
-echo ""
-
-# Get script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Installing from: ${SCRIPT_DIR}"
 echo ""
 
 # Install dependencies
-echo "📦 Installing dependencies..."
-$PYTHON -m pip install --quiet cython setuptools 2>/dev/null || {
-    echo "Trying with --break-system-packages..."
-    $PYTHON -m pip install --quiet cython setuptools --break-system-packages 2>/dev/null
-}
+if [[ "$PYTHON" == *"uv"* ]]; then
+    echo "📦 Using uv virtual environment (dependencies managed by uv)"
+else
+    echo "📦 Installing dependencies..."
+    $PYTHON -m pip install --quiet cython setuptools 2>/dev/null || {
+        echo "Trying with --break-system-packages..."
+        $PYTHON -m pip install --quiet cython setuptools --break-system-packages 2>/dev/null || true
+    }
+fi
 
 # Build Cython extension
 echo "🔨 Building Cython extension..."
@@ -121,6 +130,22 @@ DAEMON_EOF
 
 chmod +x "${DAEMON_WRAPPER}"
 echo "✅ Installed daemon wrapper: ${DAEMON_WRAPPER}"
+
+# Create Windows batch wrappers (.cmd)
+WRAPPER_CMD="${INSTALL_DIR}/arabic-rtl.cmd"
+cat > "${WRAPPER_CMD}" << WRAPPER_CMD_EOF
+@echo off
+"${PYTHON}" "${SCRIPT_DIR}/arabic_rtl_cli.py" %*
+WRAPPER_CMD_EOF
+echo "✅ Installed Windows cmd wrapper: ${WRAPPER_CMD}"
+
+DAEMON_CMD="${INSTALL_DIR}/arabic-rtl-daemon.cmd"
+cat > "${DAEMON_CMD}" << DAEMON_CMD_EOF
+@echo off
+"${PYTHON}" "${SCRIPT_DIR}/arabic_rtl_daemon.py" %*
+DAEMON_CMD_EOF
+echo "✅ Installed Windows daemon cmd wrapper: ${DAEMON_CMD}"
+
 
 echo ""
 echo "=================================="

@@ -1,9 +1,12 @@
 import pytest
 import tempfile
 import os
+import sys
+import subprocess
 
 import arabic_rtl
 import arabic_rtl_cli
+import arabic_rtl_daemon
 
 
 def test_has_arabic():
@@ -64,10 +67,11 @@ def test_smart_mode_skipping():
 
 def test_no_smart_mode():
     inp = "مرحبا `code`"
-    # In no-smart mode, `code` non-Arabic characters are preserved but backticks are preserved as non-Arabic
     result_cython = arabic_rtl.process_text(inp, smart_mode=False)
     result_python = arabic_rtl_cli.py_process_text(inp, smart_mode=False)
     assert result_cython == result_python
+    assert "`" in result_cython
+    assert result_cython.startswith("ابحرم")
 
 
 def test_parallel_processing():
@@ -93,8 +97,282 @@ def test_file_processing():
         with open(out_file, 'r', encoding='utf-8') as f_out:
             content = f_out.read()
         assert content == "هللا ةمحرو مكيلع مالسلا\n" * 50
+
+        # Also test Python fallback file processing mmap
+        out_file_py = f_path + ".py.out"
+        arabic_rtl_cli.py_process_file_mmap(f_path, num_threads=2, output=out_file_py)
+        with open(out_file_py, 'r', encoding='utf-8') as f_out:
+            content_py = f_out.read()
+        assert content_py == "هللا ةمحرو مكيلع مالسلا\n" * 50
     finally:
         if os.path.exists(f_path):
             os.remove(f_path)
         if os.path.exists(out_file):
             os.remove(out_file)
+        if os.path.exists(out_file_py):
+            os.remove(out_file_py)
+
+
+def test_cli_positional_arg():
+    cmd = [sys.executable, "arabic_rtl_cli.py", "مرحبا بالعالم"]
+    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    assert "ملاعلاب ابحرم" in res.stdout
+
+
+def test_cli_stdin():
+    cmd = [sys.executable, "arabic_rtl_cli.py"]
+    res = subprocess.run(cmd, input="السلام عليكم", capture_output=True, text=True, check=True)
+    assert "مكيلع مالسلا" in res.stdout
+
+
+def test_cli_no_smart_flag():
+    cmd = [sys.executable, "arabic_rtl_cli.py", "--no-smart", "مرحبا /path"]
+    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    assert res.stdout.strip() != ""
+
+
+def test_cli_show_stats():
+    cmd = [sys.executable, "arabic_rtl_cli.py", "--show-stats", "السلام عليكم"]
+    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    assert "مكيلع مالسلا" in res.stdout
+    assert "---" in res.stderr
+    assert "proc(s)" in res.stderr or "lines/sec" in res.stderr
+
+
+def test_cli_benchmark():
+    cmd = [sys.executable, "arabic_rtl_cli.py", "--benchmark"]
+    res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    assert "Arabic RTL Benchmark" in res.stdout
+    assert "ALL PASS" in res.stdout
+
+
+def test_cli_file_options():
+    text = "بسم الله الرحمن الرحيم\n"
+    with tempfile.NamedTemporaryFile('w+', encoding='utf-8', delete=False) as f_in:
+        f_in.write(text)
+        in_path = f_in.name
+    out_path = in_path + ".out"
+
+    try:
+        cmd = [sys.executable, "arabic_rtl_cli.py", "--file", in_path, "--output", out_path]
+        subprocess.run(cmd, check=True)
+        with open(out_path, 'r', encoding='utf-8') as f_out:
+            out_text = f_out.read()
+        assert out_text == "ميحرلا نمحرلا هللا مسب\n"
+    finally:
+        if os.path.exists(in_path):
+            os.remove(in_path)
+        if os.path.exists(out_path):
+            os.remove(out_path)
+
+
+def test_daemon_mode_lifecycle():
+    # Make sure daemon is stopped initially
+    subprocess.run([sys.executable, "arabic_rtl_daemon.py", "stop"], capture_output=True)
+
+    try:
+        # Start daemon via subprocess
+        start_res = subprocess.run([sys.executable, "arabic_rtl_daemon.py", "start"], capture_output=True, text=True, check=True)
+        assert "Daemon started" in start_res.stdout or "Daemon already running" in start_res.stdout
+
+        # Check status
+        status_res = subprocess.run([sys.executable, "arabic_rtl_daemon.py", "status"], capture_output=True, text=True, check=True)
+        assert "Daemon running" in status_res.stdout
+
+        # Test CLI daemon mode flag
+        cmd = [sys.executable, "arabic_rtl_cli.py", "--daemon", "السلام عليكم"]
+        cli_res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        assert cli_res.stdout.strip() == "مكيلع مالسلا"
+    finally:
+        # Stop daemon
+        stop_res = subprocess.run([sys.executable, "arabic_rtl_daemon.py", "stop"], capture_output=True, text=True, check=True)
+        assert "Daemon stopped" in stop_res.stdout or "not running" in stop_res.stdout
+
+
+def test_cli_no_args_help():
+    # Verify CLI prints usage help when executed with --help
+    cmd = [sys.executable, "arabic_rtl_cli.py", "--help"]
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    assert "usage:" in res.stdout or "usage:" in res.stderr
+
+
+def test_tashkeel_reversal():
+    inp = "مَرْحَبًا"
+    expected = "ابًحَرْمَ"
+    assert arabic_rtl.process_text(inp) == expected
+    assert arabic_rtl_cli.py_process_text(inp) == expected
+
+
+def test_numbers_preservation():
+    # Test ASCII digits, Arabic-Indic digits ٠-٩, and mixed
+    inp_ascii = "عام 2026"
+    expected_ascii = "2026 ماع"
+    assert arabic_rtl.process_text(inp_ascii) == expected_ascii
+    assert arabic_rtl_cli.py_process_text(inp_ascii) == expected_ascii
+
+    inp_arabic_digits = "عام٢٠٢٦"
+    expected_arabic_digits = "٢٠٢٦ماع"
+    assert arabic_rtl.process_text(inp_arabic_digits) == expected_arabic_digits
+    assert arabic_rtl_cli.py_process_text(inp_arabic_digits) == expected_arabic_digits
+
+
+
+def test_ansi_escape_sequences():
+    inp = "\x1b[31mالسلام عليكم\x1b[0m"
+    expected = "\x1b[31mمكيلع مالسلا\x1b[0m"
+    assert arabic_rtl.process_text(inp) == expected
+    assert arabic_rtl_cli.py_process_text(inp) == expected
+
+    # Test non-letter ANSI terminators like ~ or ?
+    inp_bracket = "\x1b[200~السلام عليكم\x1b[201~"
+    expected_bracket = "\x1b[200~مكيلع مالسلا\x1b[201~"
+    assert arabic_rtl.process_text(inp_bracket) == expected_bracket
+    assert arabic_rtl_cli.py_process_text(inp_bracket) == expected_bracket
+
+
+def test_bracket_mirroring():
+    inp = "مرحبا (123) بك"
+    expected = "كب (123) ابحرم"
+    assert arabic_rtl.process_text(inp) == expected
+    assert arabic_rtl_cli.py_process_text(inp) == expected
+
+    inp_brackets = "اختبار [عالم] {1}"
+    expected_brackets = "{1} [ملاع] رابتخا"
+    assert arabic_rtl.process_text(inp_brackets) == expected_brackets
+    assert arabic_rtl_cli.py_process_text(inp_brackets) == expected_brackets
+
+
+def test_windows_paths_skipping():
+    inp = "انظر C:\\Users\\test هنا"
+    expected = "انظر C:\\Users\\test هنا"
+    res_cython = arabic_rtl.process_text(inp)
+    res_python = arabic_rtl_cli.py_process_text(inp)
+    assert "C:\\Users\\test" in res_cython
+    assert "C:\\Users\\test" in res_python
+
+
+def test_quranic_and_smart_brackets():
+    inp = "﴿قُلْ هُوَ اللَّهُ أَحَدٌ﴾"
+    expected = "﴿دٌحَأَ هُلَّلا وَهُ لْقُ﴾"
+    assert arabic_rtl.process_text(inp) == expected
+    assert arabic_rtl_cli.py_process_text(inp) == expected
+
+    inp_quotes = "قال “السلام عليكم”"
+    expected_quotes = "“مكيلع مالسلا” لاق"
+    assert arabic_rtl.process_text(inp_quotes) == expected_quotes
+    assert arabic_rtl_cli.py_process_text(inp_quotes) == expected_quotes
+
+
+def test_multiline_code_blocks():
+    inp = "مرحبا\n```python\nprint('السلام عليكم')\n```\nعالم"
+    res_cython = arabic_rtl.process_text(inp)
+    res_python = arabic_rtl_cli.py_process_text(inp)
+    assert res_cython == res_python
+    assert "print('السلام عليكم')" in res_cython
+    assert "ابحرم" in res_cython
+    assert "ملاع" in res_cython
+
+
+def test_file_and_mailto_urls():
+    inp = "انظر file:///path/to/doc.txt أو mailto:test@example.com هنا"
+    res_cython = arabic_rtl.process_text(inp)
+    res_python = arabic_rtl_cli.py_process_text(inp)
+    assert "file:///path/to/doc.txt" in res_cython
+    assert "mailto:test@example.com" in res_cython
+    assert "file:///path/to/doc.txt" in res_python
+    assert "mailto:test@example.com" in res_python
+
+
+def test_markdown_heading():
+    inp = "# عنوان المقال"
+    expected = "# لاقملا ناونع"
+    assert arabic_rtl.process_text(inp) == expected
+    assert arabic_rtl_cli.py_process_text(inp) == expected
+
+
+def test_three_byte_ansi_sequences():
+    inp = "\x1b(Bالسلام عليكم\x1b)0"
+    expected = "\x1b(Bمكيلع مالسلا\x1b)0"
+    assert arabic_rtl.process_text(inp) == expected
+    assert arabic_rtl_cli.py_process_text(inp) == expected
+
+
+def test_env_variable_paths():
+    inp = "انظر $HOME/test.txt هنا"
+    res_cython = arabic_rtl.process_text(inp)
+    res_python = arabic_rtl_cli.py_process_text(inp)
+    assert "$HOME/test.txt" in res_cython
+    assert "$HOME/test.txt" in res_python
+    assert res_cython == res_python
+
+
+def test_extended_brackets():
+    inp = "اختبار 【عالم】 〔1〕"
+    expected = "〔1〕 【ملاع】 رابتخا"
+    assert arabic_rtl.process_text(inp) == expected
+    assert arabic_rtl_cli.py_process_text(inp) == expected
+
+
+def test_honorific_diacritics():
+    inp = "مُمَثَّلٌﷺ"
+    res_cython = arabic_rtl.process_text(inp)
+    res_python = arabic_rtl_cli.py_process_text(inp)
+    assert res_cython == res_python
+
+
+def test_extended_a_diacritics():
+    inp = "كِتَابٌ\u08e3"  # Extended-A diacritic
+    res_cython = arabic_rtl.process_text(inp)
+    res_python = arabic_rtl_cli.py_process_text(inp)
+    assert res_cython == res_python
+
+
+def test_arabic_punctuation_reversal():
+    inp = "مرحبا، عالم"
+    expected = "ملاع ،ابحرم"
+    assert arabic_rtl.process_text(inp) == expected
+    assert arabic_rtl_cli.py_process_text(inp) == expected
+
+    inp_q = "كيف حالك؟ بخير"
+    expected_q = "ريخب ؟كلاح فيك"
+    assert arabic_rtl.process_text(inp_q) == expected_q
+    assert arabic_rtl_cli.py_process_text(inp_q) == expected_q
+
+
+def test_parallel_code_block_preservation():
+    # Construct text with multi-line code block across chunk boundaries
+    code_block = "```python\ndef hello():\n    print('سلام')\n```\n"
+    text = ("سطر عربي الأول\n" * 60) + code_block + ("سطر عربي ثاني\n" * 60)
+
+    res_single = arabic_rtl.process_text(text)
+    res_parallel = arabic_rtl.process_text_parallel(text, num_threads=4)
+    assert res_single == res_parallel
+
+    res_py_parallel = arabic_rtl_cli.py_process_text_parallel(text, num_threads=4)
+    assert res_single == res_py_parallel
+    assert "print('سلام')" in res_parallel
+
+
+def test_cli_empty_piped_input():
+    cmd = [sys.executable, "arabic_rtl_cli.py"]
+    res = subprocess.run(cmd, input="", capture_output=True, text=True, check=True)
+    assert res.stdout == ""
+    assert res.stderr == ""
+
+
+def test_daemon_stale_files_cleanup():
+    # Simulate dead daemon by creating dummy PID/PORT files
+    arabic_rtl_daemon.PID_FILE.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    arabic_rtl_daemon.PID_FILE.write_text("9999999")  # Non-existent PID
+    arabic_rtl_daemon.PORT_FILE.write_text("55555")
+
+    # is_running should report False and clean up dead files
+    assert not arabic_rtl_daemon.is_running()
+    assert not arabic_rtl_daemon.PID_FILE.exists()
+    assert not arabic_rtl_daemon.PORT_FILE.exists()
+
+
+
+
+
+

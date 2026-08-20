@@ -1,5 +1,6 @@
 from setuptools import setup, Extension
 import os
+import sys
 
 try:
     from Cython.Build import cythonize
@@ -9,13 +10,18 @@ except ImportError:
 
 ext = ".pyx" if USE_CYTHON else ".c"
 
-# Optional native CPU tuning if requested
-extra_compile = ['-O3', '-ffast-math', '-flto', '-funroll-loops', '-fomit-frame-pointer', '-fno-exceptions']
-extra_link = ['-O3', '-flto']
+# Compiler-specific tuning
+if sys.platform == 'win32':
+    extra_compile = ['/O2', '/LTCG']
+    extra_link = ['/LTCG']
+else:
+    extra_compile = ['-O3', '-ffast-math', '-flto', '-funroll-loops', '-fomit-frame-pointer', '-fno-exceptions']
+    extra_link = ['-O3', '-flto']
 
 if os.environ.get('ENABLE_NATIVE_TUNING') == '1':
-    extra_compile.append('-march=native')
-    extra_link.append('-march=native')
+    if sys.platform != 'win32':
+        extra_compile.append('-march=native')
+        extra_link.append('-march=native')
 
 extensions = [
     Extension(

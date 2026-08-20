@@ -54,7 +54,7 @@ def _init_bitmap():
         ARABIC_BITMAP[ch >> 3] |= 1 << (ch & 7)
     for ch in range(0x0750, 0x0780):
         ARABIC_BITMAP[ch >> 3] |= 1 << (ch & 7)
-    for ch in range(0x08A0, 0x0900):
+    for ch in range(0x0870, 0x0900):  # Extended-A & Extended-B
         ARABIC_BITMAP[ch >> 3] |= 1 << (ch & 7)
     for ch in range(0xFB50, 0xFE00):
         ARABIC_BITMAP[ch >> 3] |= 1 << (ch & 7)
@@ -82,17 +82,153 @@ def py_has_arabic(text):
     return any(_is_arabic(c) for c in text)
 
 
+def _py_reverse_arabic_word(word):
+    """
+    Reverse an Arabic word preserving Tashkeel (diacritics) on their base chars
+    and keeping digit sequences (ASCII 0-9, Arabic ٠-٩, Persian ۰-۹) in LTR order.
+    """
+    if not word:
+        return word
+
+    sub_tokens = []
+    curr_type = ""
+    curr_token = []
+
+    for ch in word:
+        cp = ord(ch)
+        is_dig = (48 <= cp <= 57) or (0x0660 <= cp <= 0x0669) or (0x06F0 <= cp <= 0x06F9)
+        is_diac = (0x064B <= cp <= 0x065F) or cp == 0x0670 or (0x06D6 <= cp <= 0x06ED) or (0x08E3 <= cp <= 0x08FF) or (0x0610 <= cp <= 0x061A)
+
+        if is_dig:
+            if curr_type == "digit":
+                curr_token.append(ch)
+            else:
+                if curr_token:
+                    sub_tokens.append((curr_type, curr_token))
+                curr_type = "digit"
+                curr_token = [ch]
+        elif is_diac and curr_type == "letter" and curr_token:
+            curr_token[-1] = curr_token[-1] + ch
+        else:
+            if curr_type == "letter":
+                curr_token.append(ch)
+            else:
+                if curr_token:
+                    sub_tokens.append((curr_type, curr_token))
+                curr_type = "letter"
+                curr_token = [ch]
+
+    if curr_token:
+        sub_tokens.append((curr_type, curr_token))
+
+    res_tokens = []
+    for t_type, t_content in sub_tokens:
+        if t_type == "digit":
+            res_tokens.append("".join(t_content))
+        else:
+            t_content.reverse()
+            res_tokens.append("".join(t_content))
+
+    res_tokens.reverse()
+    return "".join(res_tokens)
+
+
 # ══════════════════════════════════════════════════════════════
-# SMART MODE (Pure Python fallback)
+# SMART MODE & ANSI SCANNER (Pure Python fallback)
 # ══════════════════════════════════════════════════════════════
 
+BRACKET_PAIRS = {
+    '(': ')', ')': '(',
+    '[': ']', ']': '[',
+    '{': '}', '}': '{',
+    '<': '>', '>': '<',
+    '«': '»', '»': '«',
+    '‹': '›', '›': '‹',
+    '（': '）', '）': '（',
+    '﴿': '﴾', '﴾': '﴿',
+    '“': '”', '”': '“',
+    '‘': '’', '’': '‘',
+    '⦅': '⦆', '⦆': '⦅',
+    '⟦': '⟧', '⟧': '⟦',
+    '⟨': '⟩', '⟩': '⟨',
+    '【': '】', '】': '【',
+    '〔': '〕', '〕': '〔',
+    '〖': '〗', '〗': '〖',
+    '⁅': '⁆', '⁆': '⁅',
+}
+
+def _scan_ansi_escape(line, i, length):
+    """Scan ANSI escape sequence starting at index i. Returns length of sequence or 0."""
+    if i >= length or line[i] not in ('\x1b', '\033'):
+        return 0
+    if i + 1 >= length:
+        return 1
+    next_ch = line[i + 1]
+    if next_ch == '[':
+        end = i + 2
+        while end < length and 0x20 <= ord(line[end]) <= 0x3F:
+            end += 1
+        if end < length and 0x40 <= ord(line[end]) <= 0x7E:
+            end += 1
+        return end - i
+    elif next_ch in (']', 'P', '^', '_'):
+        end = i + 2
+        while end < length:
+            if line[end] == '\x07':
+                end += 1
+                break
+            if line[end:end + 2] in ('\x1b\\', '\033\\'):
+                end += 2
+                break
+            end += 1
+        return end - i
+    else:
+        end = i + 1
+        while end < length and 0x20 <= ord(line[end]) <= 0x2F:
+            end += 1
+        if end < length and 0x30 <= ord(line[end]) <= 0x7E:
+            end += 1
+        return end - i
+
+def _is_path_start(line, i, length):
+    """Check if position i starts a file path or URL."""
+    # URLs
+    if (line[i:i+7] == "http://" or line[i:i+8] == "https://" or
+        line[i:i+6] == "ftp://" or line[i:i+7] == "file://" or
+        line[i:i+7] == "mailto:" or line[i:i+4] == "git@" or
+        line[i:i+6] == "ssh://" or line[i:i+5] == "ws://" or
+        line[i:i+6] == "wss://" or line[i:i+7] == "sftp://" or
+        line[i:i+6] == "git://" or line[i:i+6] == "svn://"):
+        return True
+    # Unix paths (/ or ~/) or Env vars ($ or %)
+    if (i == 0 or line[i-1] in (' ', '\t', '"', "'", '(', '[', '<', '=', ':', 'm', 'M', ';', 'g')):
+        if line[i] in ('/', '$', '%') or line[i:i+2] in ('~/', './') or line[i:i+3] == '../':
+            # Avoid division operator like "1 / 2"
+            if line[i] == '/' and (i + 1 >= length or line[i+1] in (' ', '\t', '\n', '\r')):
+                return False
+            return True
+        # Windows drive paths (C:\ or C:/ or .\ or ..\)
+        if i + 2 < length and line[i+1] == ':' and line[i+2] in ('\\', '/'):
+            if ('A' <= line[i] <= 'Z') or ('a' <= line[i] <= 'z'):
+                return True
+        if line[i:i+2] == '.\\' or line[i:i+3] == '..\\':
+            return True
+    return False
+
 def py_smart_process_line(line):
-    """Process a line, skipping code blocks, URLs, paths, commands."""
+    """Process a line, skipping code blocks, URLs, paths, commands, and ANSI sequences."""
     length = len(line)
     i = 0
     result = ""
 
     while i < length:
+        # Skip ANSI escape sequences
+        ansi_len = _scan_ansi_escape(line, i, length)
+        if ansi_len > 0:
+            result += line[i:i+ansi_len]
+            i += ansi_len
+            continue
+
         # Skip code blocks (``` ... ```)
         if line[i:i+3] == "```":
             end = line.find("```", i + 3)
@@ -115,71 +251,100 @@ def py_smart_process_line(line):
                 i = end + 1
                 continue
 
-        # Skip URLs
-        if line[i:i+7] == "http://" or line[i:i+8] == "https://" or line[i:i+6] == "ftp://":
+        # Skip URLs and File Paths
+        if _is_path_start(line, i, length):
             end = i
-            while end < length and line[end] not in (' ', '\t', '\n', '\r', ')', ']', '>'):
+            while end < length and line[end] not in (' ', '\t', '\n', '\r', '"', "'", ')', ']', '>'):
                 end += 1
             result += line[i:end]
             i = end
             continue
-
-        # Skip file paths (starting with / or ~/)
-        if (i == 0 or line[i-1] == ' ') and (line[i] == '/' or line[i:i+2] == '~/'):
-            end = i
-            while end < length and line[end] not in (' ', '\t', '\n', '\r'):
-                end += 1
-            result += line[i:end]
-            i = end
-            continue
-
-        # Skip shell commands ($ or # at start)
-        if i == 0 and line[i] in ('$', '#'):
-            result += line[i:]
-            return result
 
         # Process this character normally
         ch = line[i]
         if _is_arabic(ch):
-            # Find Arabic segment
+            # Find boundary of Arabic segment
             seg_start = i
             last_arabic_i = i
             while i < length:
                 ch = line[i]
                 if _is_arabic(ch):
                     last_arabic_i = i
-                elif ch != ' ':
+                    i += 1
+                elif _scan_ansi_escape(line, i, length) > 0 or _is_path_start(line, i, length) or line[i:i+3] == "```" or line[i] == '`':
                     break
-                i += 1
-            seg_end = last_arabic_i + 1
-            i = seg_end
-            # Reverse the Arabic segment preserving whitespace exactly
-            segment = line[seg_start:seg_end]
-            rev_words = []
-            seg_i = 0
-            seg_len = len(segment)
-            while seg_i < seg_len:
-                if segment[seg_i] == ' ':
-                    word_start = seg_i
-                    while seg_i < seg_len and segment[seg_i] == ' ':
-                        seg_i += 1
-                    rev_words.append(segment[word_start:seg_i])
+                elif ch in ('\n', '\r'):
+                    break
                 else:
-                    word_start = seg_i
-                    while seg_i < seg_len and segment[seg_i] != ' ':
-                        seg_i += 1
-                    word = segment[word_start:seg_i]
-                    if len(word) > 1:
-                        rev_words.append(word[::-1])
-                    else:
-                        rev_words.append(word)
-            rev_words.reverse()
-            result += ''.join(rev_words)
+                    i += 1
+
+            seg_end = i
+            while seg_end > last_arabic_i + 1:
+                prev_ch = line[seg_end - 1]
+                if prev_ch in (' ', '\t'):
+                    seg_end -= 1
+                elif prev_ch in BRACKET_PAIRS or prev_ch in ('.', ',', '!', '?', ':', ';', '-'):
+                    break
+                elif (48 <= ord(prev_ch) <= 57) or (0x0660 <= ord(prev_ch) <= 0x0669) or (0x06F0 <= ord(prev_ch) <= 0x06F9):
+                    break
+                else:
+                    seg_end -= 1
+
+            i = seg_end
+            segment = line[seg_start:seg_end]
+            result += _py_reverse_segment(segment)
         else:
             result += line[i]
             i += 1
 
     return result
+
+def _py_reverse_segment(segment):
+    """Reverse an Arabic segment preserving words, numbers, and mirroring brackets."""
+    tokens = []
+    seg_i = 0
+    seg_len = len(segment)
+
+    while seg_i < seg_len:
+        ch = segment[seg_i]
+        if ch == ' ':
+            start = seg_i
+            while seg_i < seg_len and segment[seg_i] == ' ':
+                seg_i += 1
+            tokens.append(segment[start:seg_i])
+        elif ch in BRACKET_PAIRS:
+            tokens.append(BRACKET_PAIRS[ch])
+            seg_i += 1
+        else:
+            start = seg_i
+            cp = ord(ch)
+            is_digit = (48 <= cp <= 57) or (0x0660 <= cp <= 0x0669) or (0x06F0 <= cp <= 0x06F9)
+            if is_digit:
+                while seg_i < seg_len:
+                    c = ord(segment[seg_i])
+                    if (48 <= c <= 57) or (0x0660 <= c <= 0x0669) or (0x06F0 <= c <= 0x06F9):
+                        seg_i += 1
+                    else:
+                        break
+                tokens.append(segment[start:seg_i])
+            elif cp in (0x060C, 0x061B, 0x061F, 0x066A, 0x066B, 0x066C):
+                tokens.append(ch)
+                seg_i += 1
+            elif _is_arabic(ch):
+                while seg_i < seg_len and segment[seg_i] not in (' ', '\n', '\r') and segment[seg_i] not in BRACKET_PAIRS:
+                    c = ord(segment[seg_i])
+                    if (48 <= c <= 57) or (0x0660 <= c <= 0x0669) or (0x06F0 <= c <= 0x06F9) or c in (0x060C, 0x061B, 0x061F, 0x066A, 0x066B, 0x066C):
+                        break
+                    seg_i += 1
+                word = segment[start:seg_i]
+                tokens.append(_py_reverse_arabic_word(word))
+            else:
+                while seg_i < seg_len and segment[seg_i] not in (' ', '\n', '\r') and segment[seg_i] not in BRACKET_PAIRS and not _is_arabic(segment[seg_i]):
+                    seg_i += 1
+                tokens.append(segment[start:seg_i])
+
+    tokens.reverse()
+    return "".join(tokens)
 
 
 def py_process_line_normal(line):
@@ -189,6 +354,13 @@ def py_process_line_normal(line):
     result = ""
 
     while i < length:
+        # Skip ANSI escape sequences
+        ansi_len = _scan_ansi_escape(line, i, length)
+        if ansi_len > 0:
+            result += line[i:i+ansi_len]
+            i += ansi_len
+            continue
+
         ch = line[i]
         if _is_arabic(ch):
             seg_start = i
@@ -197,32 +369,13 @@ def py_process_line_normal(line):
                 ch = line[i]
                 if _is_arabic(ch):
                     last_arabic_i = i
-                elif ch != ' ':
+                elif _scan_ansi_escape(line, i, length) > 0 or ch in ('\n', '\r'):
                     break
                 i += 1
             seg_end = last_arabic_i + 1
             i = seg_end
             segment = line[seg_start:seg_end]
-            rev_words = []
-            seg_i = 0
-            seg_len = len(segment)
-            while seg_i < seg_len:
-                if segment[seg_i] == ' ':
-                    word_start = seg_i
-                    while seg_i < seg_len and segment[seg_i] == ' ':
-                        seg_i += 1
-                    rev_words.append(segment[word_start:seg_i])
-                else:
-                    word_start = seg_i
-                    while seg_i < seg_len and segment[seg_i] != ' ':
-                        seg_i += 1
-                    word = segment[word_start:seg_i]
-                    if len(word) > 1:
-                        rev_words.append(word[::-1])
-                    else:
-                        rev_words.append(word)
-            rev_words.reverse()
-            result += ''.join(rev_words)
+            result += _py_reverse_segment(segment)
         else:
             result += line[i]
             i += 1
@@ -232,28 +385,56 @@ def py_process_line_normal(line):
 def py_process_text(text, smart_mode=True):
     """Process Arabic prose. Auto-skip code blocks, etc. if smart_mode is True."""
     lines = text.split('\n')
-    if smart_mode:
-        return '\n'.join(py_smart_process_line(line) for line in lines)
-    else:
+    if not smart_mode:
         return '\n'.join(py_process_line_normal(line) for line in lines)
+
+    out = []
+    in_code_block = False
+    for line in lines:
+        stripped = line.strip()
+        if in_code_block:
+            out.append(line)
+            if "```" in stripped:
+                in_code_block = False
+        else:
+            if stripped.startswith("```"):
+                out.append(py_smart_process_line(line))
+                if stripped.count("```") % 2 != 0:
+                    in_code_block = True
+            else:
+                out.append(py_smart_process_line(line))
+    return '\n'.join(out)
 
 py_reverse_arabic_text = py_process_text
 
 
-
-# 1BRC Technique: Chunk-based splitting for multiprocessing
-def _split_lines(lines, num_chunks):
+def _split_lines(lines, num_chunks, smart_mode=True):
     n = len(lines)
-    # Bug fix #4: cap num_chunks to n so chunk_size never becomes 0
-    num_chunks = min(num_chunks, n) if n > 0 else 1
-    chunk_size = n // num_chunks
+    if n > 0 and num_chunks > n:
+        num_chunks = n
+    if num_chunks <= 1 or n == 0:
+        return [lines]
+    target_chunk_size = n // num_chunks
     chunks = []
     start = 0
-    for i in range(num_chunks - 1):
-        end = start + chunk_size
-        chunks.append(lines[start:end])
-        start = end
-    chunks.append(lines[start:])
+    in_code_block = False
+
+    for i in range(n):
+        if smart_mode:
+            stripped = lines[i].strip()
+            if in_code_block:
+                if "```" in stripped:
+                    in_code_block = False
+            else:
+                if stripped.startswith("```") and stripped.count("```") % 2 != 0:
+                    in_code_block = True
+
+        if not in_code_block and (i - start + 1) >= target_chunk_size and len(chunks) < num_chunks - 1:
+            chunks.append(lines[start:i + 1])
+            start = i + 1
+
+    if start < n:
+        chunks.append(lines[start:])
     return chunks
 
 
@@ -261,7 +442,7 @@ def _process_chunk(args):
     """Worker function for multiprocessing."""
     chunk, smart_mode = args
     if smart_mode:
-        return [py_smart_process_line(line) for line in chunk]
+        return py_process_text('\n'.join(chunk), smart_mode=True).split('\n')
     else:
         return [py_process_line_normal(line) for line in chunk]
 
@@ -274,7 +455,7 @@ def py_process_text_parallel(text, num_threads=4, smart_mode=True):
     if n < 100 or num_threads <= 1:
         return py_process_text(text, smart_mode)
 
-    chunks = _split_lines(lines, num_threads)
+    chunks = _split_lines(lines, num_threads, smart_mode)
     chunk_args = [(chunk, smart_mode) for chunk in chunks]
 
     with multiprocessing.Pool(num_threads) as pool:
@@ -314,10 +495,12 @@ def py_process_file_mmap(filepath, num_threads=4, output=None, smart_mode=True):
     else:
         result = py_process_text(text, smart_mode)
 
-    # Bug fix #5: handle output file (mirrors process_file_parallel behaviour)
     if output:
-        with open(output, 'w', encoding='utf-8') as f:
-            f.write(result)
+        try:
+            with open(output, 'w', encoding='utf-8') as f:
+                f.write(result)
+        except OSError as e:
+            print(f"Error: Could not write output file '{output}': {e}", file=sys.stderr)
     else:
         print(result)
 
@@ -345,7 +528,16 @@ else:
 # CLI
 # ══════════════════════════════════════════════════════════════
 
+def _configure_std_streams():
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            try:
+                stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+
 def main():
+    _configure_std_streams()
     parser = argparse.ArgumentParser(
         description='Fast Arabic RTL processor (1BRC-optimized)'
     )
@@ -386,7 +578,7 @@ def main():
         else:
             parser.print_help()
             return
-        result = send_to_daemon(text)
+        result = send_to_daemon(text, smart_mode)
         print(result, end='')
         return
 
@@ -398,11 +590,11 @@ def main():
     # Text input
     if args.text:
         text = args.text
-    else:
+    elif not sys.stdin.isatty():
         text = sys.stdin.read()
-        if not text:
-            parser.print_help()
-            return
+    else:
+        parser.print_help()
+        return
 
     start = time.perf_counter()
 
@@ -416,7 +608,7 @@ def main():
     if args.output:
         with open(args.output, 'w', encoding='utf-8') as f:
             f.write(result)
-    else:
+    elif text:
         print(result)
 
     if args.show_stats:
