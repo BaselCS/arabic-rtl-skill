@@ -372,6 +372,182 @@ def test_daemon_stale_files_cleanup():
     assert not arabic_rtl_daemon.PORT_FILE.exists()
 
 
+def test_brackets_mirroring_and_nesting():
+    cases = [
+        ("(نص عربي)", "(يبرع صن)"),
+        ("[نص عربي]", "[يبرع صن]"),
+        ("«نص عربي»", "«يبرع صن»"),
+        ("“نص عربي”", "“يبرع صن”"),
+        ("‹نص عربي›", "‹يبرع صن›"),
+        ("﴿نص عربي﴾", "﴿يبرع صن﴾"),
+        ("（نص عربي）", "（يبرع صن）"),
+    ]
+    for inp, exp in cases:
+        assert arabic_rtl.process_text(inp) == exp
+        assert arabic_rtl_cli.py_process_text(inp) == exp
+
+
+def test_numbers_floats_percentages_dates_times():
+    cases = [
+        ("النسبة هي 12.5% تقريبا", "ابيرقت 12.5% يه ةبسنلا"),
+        ("المبلغ 1,000 دينار", "رانيد 1,000 غلبملا"),
+        ("التاريخ 2026/08/20", "2026/08/20 خيراتلا"),
+        ("التاريخ 2026-08-20", "2026-08-20 خيراتلا"),
+        ("الوقت 12:30", "12:30 تقولا"),
+        ("الوقت 12:30:45", "12:30:45 تقولا"),
+        ("درجة الحرارة +25 مئوية", "ةيوئم +25 ةرارحلا ةجرد"),
+        ("الرصيد -50 دولار", "رالود -50 ديصرلا"),
+    ]
+    for inp, exp in cases:
+        assert arabic_rtl.process_text(inp) == exp
+        assert arabic_rtl_cli.py_process_text(inp) == exp
+
+
+def test_arabic_with_english_words_in_sentence():
+    cases = [
+        ("البرنامج مكتوب بلغة Python", "Python ةغلب بوتكم جمانربلا"),
+        ("هذا ملف README.md", "README.md فلم اذه"),
+        ("اضغط على زر OK للمتابعة", "ةعباتملل OK رز ىلع طغضا"),
+    ]
+    for inp, exp in cases:
+        assert arabic_rtl.process_text(inp) == exp
+        assert arabic_rtl_cli.py_process_text(inp) == exp
+
+
+def test_markdown_prefixes_and_headers():
+    cases = [
+        ("# عنوان رئيسي", "# يسيئر ناونع"),
+        ("## عنوان فرعي", "## يعرف ناونع"),
+        ("### قسم ثالث", "### ثلاث مسق"),
+        ("- [x] مهمة مكتملة", "- [x] ةلمتكم ةمهم"),
+        ("- [ ] مهمة متبقية", "- [ ] ةيقبتم ةمهم"),
+        ("> اقتباس مهم", "> مهم سابتقا"),
+        ("> [!NOTE] ملاحظة هامة", "> [!NOTE] ةماه ةظحالم"),
+        ("1. العنصر الأول", "1. لوألا رصنعلا"),
+    ]
+    for inp, exp in cases:
+        assert arabic_rtl.process_text(inp) == exp
+        assert arabic_rtl_cli.py_process_text(inp) == exp
+
+
+def test_markdown_tables():
+    inp = "| الاسم | العمر |\n| أحمد | 25 |"
+    res_cython = arabic_rtl.process_text(inp)
+    res_python = arabic_rtl_cli.py_process_text(inp)
+    assert res_cython == res_python
+    assert "مسالا" in res_cython
+    assert "دمحأ" in res_cython
+    assert "25" in res_cython
+
+
+def test_extended_unicode_diacritics_and_supplementary():
+    # Extended-B diacritic
+    inp_ext_b = "عَرَبِيّ\u0898"
+    assert arabic_rtl.process_text(inp_ext_b) == arabic_rtl_cli.py_process_text(inp_ext_b)
+
+    # Arabic mathematical supplementary
+    inp_math = "رياضيات \U0001EE00"
+    assert arabic_rtl.has_arabic(inp_math)
+    assert arabic_rtl_cli.py_has_arabic(inp_math)
+
+
+def test_cython_python_parity():
+    test_suite = [
+        "السلام عليكم ورحمة الله وبركاته",
+        "المبلغ 5,250.75 $ فقط لا غير",
+        "استخدم git clone https://github.com/test/repo.git للتحميل",
+        "المسار هو /var/log/syslog على السيرفر",
+        "(اختبار 1) مع [اختبار 2] و {اختبار 3}",
+        "النسبة المئوية: 99.9%",
+        "تاريخ اليوم 2026/08/20 والوقت 14:05:00",
+    ]
+    for text in test_suite:
+        cy_res = arabic_rtl.process_text(text)
+        py_res = arabic_rtl_cli.py_process_text(text)
+        assert cy_res == py_res, f"Parity mismatch for: {text!r}\nCython: {cy_res!r}\nPython: {py_res!r}"
+
+
+def test_cli_stream_mode():
+    cmd = [sys.executable, "arabic_rtl_cli.py", "--stream"]
+    inp = "مرحبا بالعالم\nسطر ثاني\n"
+    res = subprocess.run(cmd, input=inp, capture_output=True, text=True, check=True)
+    expected = "ملاعلاب ابحرم\nيناث رطس\n"
+    assert res.stdout == expected
+
+
+def test_decide_process_count_by_text_length():
+    # Short text: should use 1 process (avoid multiprocessing overhead)
+    short_text = "السلام عليكم ورحمة الله وبركاته\n" * 10
+    assert arabic_rtl.decide_process_count(short_text) == 1
+    assert arabic_rtl_cli.py_decide_process_count(short_text) == 1
+
+    # Medium text: 200 lines -> 2 processes
+    medium_text = "نص عربي لاختبار المعالجة المتعددة\n" * 200
+    assert arabic_rtl.decide_process_count(medium_text, max_processes=8) == 2
+    assert arabic_rtl_cli.py_decide_process_count(medium_text, max_processes=8) == 2
+
+    # Moderate-large text: 1000 lines -> 4 processes
+    mod_text = "سطر نص عربي للتأكد من توزيع المهام\n" * 1000
+    assert arabic_rtl.decide_process_count(mod_text, max_processes=8) == 4
+    assert arabic_rtl_cli.py_decide_process_count(mod_text, max_processes=8) == 4
+
+    # Large text: 4000 lines -> 8 processes
+    large_text = "معالجة نصوص عربية ضخمة بأعلى كفاءة\n" * 4000
+    assert arabic_rtl.decide_process_count(large_text, max_processes=16) == 8
+    assert arabic_rtl_cli.py_decide_process_count(large_text, max_processes=16) == 8
+
+    # Very large text: 12000 lines -> 16 processes
+    huge_text = "سطر ضخم جدا لتحديد أقصى عدد معالجات\n" * 12000
+    assert arabic_rtl.decide_process_count(huge_text, max_processes=16) == 16
+    assert arabic_rtl_cli.py_decide_process_count(huge_text, max_processes=16) == 16
+
+
+def test_decide_process_count_constraints_and_types():
+    large_text = "نص عربي طويل\n" * 5000
+
+    # Max processes constraint
+    assert arabic_rtl.decide_process_count(large_text, max_processes=2) == 2
+    assert arabic_rtl.decide_process_count(large_text, max_processes=1) == 1
+    assert arabic_rtl_cli.py_decide_process_count(large_text, max_processes=2) == 2
+    assert arabic_rtl_cli.py_decide_process_count(large_text, max_processes=1) == 1
+
+    # Passing list of lines
+    lines_list = ["نص عربي"] * 300
+    assert arabic_rtl.decide_process_count(lines_list, max_processes=8) == 2
+    assert arabic_rtl_cli.py_decide_process_count(lines_list, max_processes=8) == 2
+
+    # Passing line count as int
+    assert arabic_rtl.decide_process_count(50, max_processes=8) == 1
+    assert arabic_rtl.decide_process_count(300, max_processes=8) == 2
+    assert arabic_rtl.decide_process_count(1500, max_processes=8) == 4
+    assert arabic_rtl.decide_process_count(5000, max_processes=16) == 8
+    assert arabic_rtl.decide_process_count(20000, max_processes=16) == 16
+
+    # Parity check
+    for count in [10, 80, 150, 400, 800, 2500, 8000, 20000]:
+        assert arabic_rtl.decide_process_count(count) == arabic_rtl_cli.py_decide_process_count(count)
+
+
+def test_auto_parallel_processing_execution():
+    # Test auto process selection (num_threads=0) on short text
+    short_text = "مرحبا بالعالم\n" * 10
+    cy_short = arabic_rtl.process_text_parallel(short_text, num_threads=0)
+    py_short = arabic_rtl_cli.py_process_text_parallel(short_text, num_threads=0)
+    single_short = arabic_rtl.process_text(short_text)
+    assert cy_short == single_short
+    assert py_short == single_short
+
+    # Test auto process selection on large text
+    large_text = ("الحمد لله رب العالمين\n" * 150) + ("```python\nx = 1\n```\n") + ("الرحمن الرحيم\n" * 150)
+    cy_large = arabic_rtl.process_text_parallel(large_text, num_threads=0)
+    py_large = arabic_rtl_cli.py_process_text_parallel(large_text, num_threads=0)
+    single_large = arabic_rtl.process_text(large_text)
+    assert cy_large == single_large
+    assert py_large == single_large
+
+
+
+
 
 
 

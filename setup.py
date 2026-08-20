@@ -56,6 +56,13 @@ setup(
     description="Blazing fast Arabic RTL text processor for LTR terminals",
     author="BaselCS",
     ext_modules=ext_modules,
+    py_modules=["arabic_rtl_cli", "arabic_rtl_daemon"],
+    entry_points={
+        "console_scripts": [
+            "arabic-rtl=arabic_rtl_cli:main",
+            "arabic-rtl-daemon=arabic_rtl_daemon:main",
+        ]
+    },
     python_requires='>=3.10',
 )
 

@@ -456,8 +456,9 @@ def main():
             sys.exit(1)
 
     elif command == "process":
+        smart_mode = "--no-smart" not in sys.argv[2:]
         text = sys.stdin.read()
-        result = send_to_daemon(text)
+        result = send_to_daemon(text, smart_mode=smart_mode)
         print(result, end='')
 
     else:

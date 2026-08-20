@@ -135,14 +135,14 @@ echo "✅ Installed daemon wrapper: ${DAEMON_WRAPPER}"
 WRAPPER_CMD="${INSTALL_DIR}/arabic-rtl.cmd"
 cat > "${WRAPPER_CMD}" << WRAPPER_CMD_EOF
 @echo off
-"${PYTHON}" "${SCRIPT_DIR}/arabic_rtl_cli.py" %*
+${PYTHON} "${SCRIPT_DIR}/arabic_rtl_cli.py" %*
 WRAPPER_CMD_EOF
 echo "✅ Installed Windows cmd wrapper: ${WRAPPER_CMD}"
 
 DAEMON_CMD="${INSTALL_DIR}/arabic-rtl-daemon.cmd"
 cat > "${DAEMON_CMD}" << DAEMON_CMD_EOF
 @echo off
-"${PYTHON}" "${SCRIPT_DIR}/arabic_rtl_daemon.py" %*
+${PYTHON} "${SCRIPT_DIR}/arabic_rtl_daemon.py" %*
 DAEMON_CMD_EOF
 echo "✅ Installed Windows daemon cmd wrapper: ${DAEMON_CMD}"
 

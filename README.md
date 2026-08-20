@@ -128,8 +128,11 @@ python3 arabic_rtl_cli.py --file large.txt --threads 4
 # حفظ المخرجات في ملف
 python3 arabic_rtl_cli.py --file input.txt --output output.txt
 
-# الوضع الهادئ (بدون عرض الإحصائيات)
-echo "Hello مرحبا" | python3 arabic_rtl_cli.py --quiet
+# وضع البث المباشر المباشر (للأنابيب وسجلات log / tail -f)
+tail -f app.log | python3 arabic_rtl_cli.py --stream
+
+# إيقاف الوضع الذكي (معالجة كل شيء كنص عادي)
+echo "Hello مرحبا" | python3 arabic_rtl_cli.py --no-smart
 
 # تشغيل اختبار الأداء (Benchmark)
 python3 arabic_rtl_cli.py --benchmark
@@ -157,13 +160,13 @@ if has_arabic("Hello مرحبا"):
 
 ### التكامل مع opencode
 
-يمكن استخدام هذه الأداة كمهارة ([opencode Skill](https://opencode.ai)). قم بنسخ ملف `SKILL.md` إلى مجلد مهارات opencode لديك:
+يمكن استخدام هذه الأداة كمهارة ([opencode Skill](https://opencode.ai)). قم بنسخ مهارات opencode لديك:
 
 <div align="left" dir="ltr">
 
 ```bash
-mkdir -p ~/.opencode/skills/arabic-rtl
-cp SKILL.md ~/.opencode/skills/arabic-rtl/
+mkdir -p ~/.opencode/skills
+cp -r .opencode/skills/* ~/.opencode/skills/
 ```
 
 </div>
@@ -176,6 +179,7 @@ cp SKILL.md ~/.opencode/skills/arabic-rtl/
 |-------|-------|-----------|
 | **الوضع الافتراضي** | معالجة فورية، بدون إحصائيات | `echo "text" \| arabic-rtl` |
 | **الوضع المستدام** | خلفية مستمرة، استجابة فورية | `arabic-rtl-daemon start` |
+| **وضع البث المباشر** | معالجة فورية سطر بسطر للسجلات | `tail -f log \| arabic-rtl --stream` |
 | **وضع الملفات** | معالجة ملفات بكفاءة عالية | `arabic-rtl --file input.txt` |
 | **وضع المقارنة** | اختبار الأداء مع إحصائيات | `arabic-rtl --benchmark` |
 | **عرض الإحصائيات** | إظهار أداء المعالجة | `arabic-rtl --show-stats` |

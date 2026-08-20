@@ -34,6 +34,8 @@ try:
         process_text_parallel,
         process_file_parallel,
         reverse_arabic_text,
+        decide_process_count,
+        get_optimal_process_count,
     )
     FAST_MODE = True
 except ImportError:
@@ -68,18 +70,63 @@ _init_bitmap()
 def _is_arabic(ch):
     cp = ord(ch)
     if cp > 0xFFFF:
+        if (0x10EC0 <= cp <= 0x10EFF) or (0x1EE00 <= cp <= 0x1EEFF):
+            return True
         return False
     return bool(ARABIC_BITMAP[cp >> 3] & (1 << (cp & 7)))
 
 def _is_arabic_punct(ch):
     return ord(ch) in (0x060C, 0x061B, 0x061F, 0x0640)
 
+def _is_digit_char(c):
+    cp = ord(c)
+    return (48 <= cp <= 57) or (0x0660 <= cp <= 0x0669) or (0x06F0 <= cp <= 0x06F9)
 
-# Non-smart processing methods removed.
+def _is_diacritic(cp):
+    return (
+        (0x064B <= cp <= 0x065F) or
+        cp == 0x0670 or
+        (0x06D6 <= cp <= 0x06ED) or
+        (0x08E3 <= cp <= 0x08FF) or
+        (0x0610 <= cp <= 0x061A) or
+        (0x0898 <= cp <= 0x089F) or
+        (0x08CA <= cp <= 0x08E1) or
+        cp in (0xFE70, 0xFE72, 0xFE74, 0xFE76, 0xFE78, 0xFE7A, 0xFE7C, 0xFE7E)
+    )
 
+import re
+
+PREFIX_PATTERNS = [
+    re.compile(r'^(#{1,6}\s+)'),
+    re.compile(r'^(>\s*(?:\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*)?)'),
+    re.compile(r'^(>+\s*)'),
+    re.compile(r'^(\s*[-*+]\s+\[[ xX]\]\s+)'),
+    re.compile(r'^(\s*[-*+]\s+)'),
+    re.compile(r'^(\s*\d+[.)]\s+)'),
+    re.compile(r'^(\s*[$#]\s+)'),
+]
 
 def py_has_arabic(text):
     return any(_is_arabic(c) for c in text)
+
+
+def _py_scan_number(text, i, length):
+    """Scan numbers, dates, times, percentages, keeping them LTR."""
+    start = i
+    if text[i] in ('+', '-') and i + 1 < length and _is_digit_char(text[i+1]):
+        i += 1
+    if i < length and _is_digit_char(text[i]):
+        while i < length:
+            if _is_digit_char(text[i]):
+                i += 1
+            elif text[i] in ('.', ',', ':', '/', '-', '_', '\u066B', '\u066C') and i + 1 < length and _is_digit_char(text[i+1]):
+                i += 2
+            else:
+                break
+        if i < length and text[i] in ('%', '\u066A', '\u2030'):
+            i += 1
+        return text[start:i], i - start
+    return None, 0
 
 
 def _py_reverse_arabic_word(word):
@@ -96,8 +143,8 @@ def _py_reverse_arabic_word(word):
 
     for ch in word:
         cp = ord(ch)
-        is_dig = (48 <= cp <= 57) or (0x0660 <= cp <= 0x0669) or (0x06F0 <= cp <= 0x06F9)
-        is_diac = (0x064B <= cp <= 0x065F) or cp == 0x0670 or (0x06D6 <= cp <= 0x06ED) or (0x08E3 <= cp <= 0x08FF) or (0x0610 <= cp <= 0x061A)
+        is_dig = _is_digit_char(ch)
+        is_diac = _is_diacritic(cp)
 
         if is_dig:
             if curr_type == "digit":
@@ -215,194 +262,193 @@ def _is_path_start(line, i, length):
             return True
     return False
 
-def py_smart_process_line(line):
-    """Process a line, skipping code blocks, URLs, paths, commands, and ANSI sequences."""
-    length = len(line)
-    i = 0
-    result = ""
+def _has_arabic_in_bracket(line, i, length):
+    ch = line[i]
+    close_br = BRACKET_PAIRS.get(ch, None)
+    if not close_br:
+        return False
+    end = line.find(close_br, i + 1)
+    if end != -1:
+        return py_has_arabic(line[i:end+1])
+    return False
 
-    while i < length:
-        # Skip ANSI escape sequences
-        ansi_len = _scan_ansi_escape(line, i, length)
-        if ansi_len > 0:
-            result += line[i:i+ansi_len]
-            i += ansi_len
-            continue
-
-        # Skip code blocks (``` ... ```)
-        if line[i:i+3] == "```":
-            end = line.find("```", i + 3)
-            if end == -1:
-                result += line[i:]
-                return result
-            else:
-                result += line[i:end + 3]
-                i = end + 3
-                continue
-
-        # Skip inline code (` ... `)
-        if line[i] == '`':
-            end = line.find('`', i + 1)
-            if end == -1:
-                result += line[i:]
-                return result
-            else:
-                result += line[i:end + 1]
-                i = end + 1
-                continue
-
-        # Skip URLs and File Paths
-        if _is_path_start(line, i, length):
-            end = i
-            while end < length and line[end] not in (' ', '\t', '\n', '\r', '"', "'", ')', ']', '>'):
-                end += 1
-            result += line[i:end]
-            i = end
-            continue
-
-        # Process this character normally
-        ch = line[i]
-        if _is_arabic(ch):
-            # Find boundary of Arabic segment
-            seg_start = i
-            last_arabic_i = i
-            while i < length:
-                ch = line[i]
-                if _is_arabic(ch):
-                    last_arabic_i = i
-                    i += 1
-                elif _scan_ansi_escape(line, i, length) > 0 or _is_path_start(line, i, length) or line[i:i+3] == "```" or line[i] == '`':
-                    break
-                elif ch in ('\n', '\r'):
-                    break
-                else:
-                    i += 1
-
-            seg_end = i
-            while seg_end > last_arabic_i + 1:
-                prev_ch = line[seg_end - 1]
-                if prev_ch in (' ', '\t'):
-                    seg_end -= 1
-                elif prev_ch in BRACKET_PAIRS or prev_ch in ('.', ',', '!', '?', ':', ';', '-'):
-                    break
-                elif (48 <= ord(prev_ch) <= 57) or (0x0660 <= ord(prev_ch) <= 0x0669) or (0x06F0 <= ord(prev_ch) <= 0x06F9):
-                    break
-                else:
-                    seg_end -= 1
-
-            i = seg_end
-            segment = line[seg_start:seg_end]
-            result += _py_reverse_segment(segment)
-        else:
-            result += line[i]
-            i += 1
-
-    return result
 
 def _py_reverse_segment(segment):
     """Reverse an Arabic segment preserving words, numbers, and mirroring brackets."""
+    length = len(segment)
+    i = 0
     tokens = []
-    seg_i = 0
-    seg_len = len(segment)
 
-    while seg_i < seg_len:
-        ch = segment[seg_i]
-        if ch == ' ':
-            start = seg_i
-            while seg_i < seg_len and segment[seg_i] == ' ':
-                seg_i += 1
-            tokens.append(segment[start:seg_i])
+    while i < length:
+        ch = segment[i]
+        if ch in (' ', '\t'):
+            start = i
+            while i < length and segment[i] in (' ', '\t'):
+                i += 1
+            tokens.append(segment[start:i])
         elif ch in BRACKET_PAIRS:
             tokens.append(BRACKET_PAIRS[ch])
-            seg_i += 1
+            i += 1
         else:
-            start = seg_i
-            cp = ord(ch)
-            is_digit = (48 <= cp <= 57) or (0x0660 <= cp <= 0x0669) or (0x06F0 <= cp <= 0x06F9)
-            if is_digit:
-                while seg_i < seg_len:
-                    c = ord(segment[seg_i])
-                    if (48 <= c <= 57) or (0x0660 <= c <= 0x0669) or (0x06F0 <= c <= 0x06F9):
-                        seg_i += 1
-                    else:
-                        break
-                tokens.append(segment[start:seg_i])
-            elif cp in (0x060C, 0x061B, 0x061F, 0x066A, 0x066B, 0x066C):
+            start = i
+            num_str, num_len = _py_scan_number(segment, i, length)
+            if num_len > 0:
+                tokens.append(num_str)
+                i += num_len
+            elif ord(ch) in (0x060C, 0x061B, 0x061F, 0x066A, 0x066B, 0x066C):
                 tokens.append(ch)
-                seg_i += 1
+                i += 1
             elif _is_arabic(ch):
-                while seg_i < seg_len and segment[seg_i] not in (' ', '\n', '\r') and segment[seg_i] not in BRACKET_PAIRS:
-                    c = ord(segment[seg_i])
-                    if (48 <= c <= 57) or (0x0660 <= c <= 0x0669) or (0x06F0 <= c <= 0x06F9) or c in (0x060C, 0x061B, 0x061F, 0x066A, 0x066B, 0x066C):
+                while i < length and segment[i] not in (' ', '\t', '\n', '\r') and segment[i] not in BRACKET_PAIRS:
+                    c = ord(segment[i])
+                    if _is_digit_char(segment[i]) or c in (0x060C, 0x061B, 0x061F, 0x066A, 0x066B, 0x066C):
                         break
-                    seg_i += 1
-                word = segment[start:seg_i]
+                    i += 1
+                word = segment[start:i]
                 tokens.append(_py_reverse_arabic_word(word))
             else:
-                while seg_i < seg_len and segment[seg_i] not in (' ', '\n', '\r') and segment[seg_i] not in BRACKET_PAIRS and not _is_arabic(segment[seg_i]):
-                    seg_i += 1
-                tokens.append(segment[start:seg_i])
+                while i < length and segment[i] not in (' ', '\t', '\n', '\r') and segment[i] not in BRACKET_PAIRS:
+                    c = ord(segment[i])
+                    if _is_arabic(segment[i]) or _is_digit_char(segment[i]) or c in (0x060C, 0x061B, 0x061F, 0x066A, 0x066B, 0x066C):
+                        break
+                    i += 1
+                tokens.append(segment[start:i])
 
     tokens.reverse()
     return "".join(tokens)
 
 
-def py_process_line_normal(line):
-    """Process a line without smart skipping."""
+def py_process_line(line, smart_mode=True):
+    """Process a single line in pure Python."""
+    if not py_has_arabic(line):
+        return line
+
+    prefix = ""
+    if smart_mode:
+        for pat in PREFIX_PATTERNS:
+            m = pat.match(line)
+            if m:
+                prefix = m.group(1)
+                line = line[len(prefix):]
+                break
+
+        if line.startswith("|") and line.endswith("|"):
+            cells = line.split("|")
+            proc_cells = [py_process_line(c, smart_mode=True) for c in cells[1:-1]]
+            return prefix + "|" + "|".join(proc_cells) + "|"
+
     length = len(line)
     i = 0
-    result = ""
+    result = []
 
     while i < length:
-        # Skip ANSI escape sequences
         ansi_len = _scan_ansi_escape(line, i, length)
         if ansi_len > 0:
-            result += line[i:i+ansi_len]
+            result.append(line[i:i+ansi_len])
             i += ansi_len
             continue
 
+        if smart_mode:
+            # Skip code blocks (``` ... ```)
+            if line.startswith("```", i):
+                end = line.find("```", i + 3)
+                if end == -1:
+                    result.append(line[i:])
+                    return prefix + "".join(result)
+                else:
+                    result.append(line[i:end + 3])
+                    i = end + 3
+                    continue
+
+            # Skip inline code (` ... `)
+            if line[i] == '`':
+                end = line.find('`', i + 1)
+                if end == -1:
+                    result.append(line[i:])
+                    return prefix + "".join(result)
+                else:
+                    result.append(line[i:end + 1])
+                    i = end + 1
+                    continue
+
+            # Skip URLs and File paths
+            if _is_path_start(line, i, length):
+                end = i
+                while end < length and line[end] not in (' ', '\t', '\n', '\r', '"', "'", ')', ']', '>'):
+                    end += 1
+                result.append(line[i:end])
+                i = end
+                continue
+
+        # Check if Arabic segment starts here
         ch = line[i]
-        if _is_arabic(ch):
+        is_br_arabic = (ch in BRACKET_PAIRS) and _has_arabic_in_bracket(line, i, length)
+        if _is_arabic(ch) or is_br_arabic:
             seg_start = i
             last_arabic_i = i
             while i < length:
                 ch = line[i]
                 if _is_arabic(ch):
                     last_arabic_i = i
-                elif _scan_ansi_escape(line, i, length) > 0 or ch in ('\n', '\r'):
+                    i += 1
+                elif _scan_ansi_escape(line, i, length) > 0 or (smart_mode and (line.startswith("```", i) or line[i] == '`' or _is_path_start(line, i, length))):
                     break
-                i += 1
-            seg_end = last_arabic_i + 1
+                elif line[i] in ('\n', '\r'):
+                    break
+                else:
+                    i += 1
+
+            if not smart_mode:
+                seg_end = last_arabic_i + 1
+            else:
+                seg_end = i
+                trailing = line[last_arabic_i + 1 : seg_end]
+                if "  " in trailing:
+                    idx = trailing.find("  ")
+                    seg_end = last_arabic_i + 1 + idx
+                else:
+                    while seg_end > last_arabic_i + 1:
+                        prev_ch = line[seg_end - 1]
+                        if prev_ch in (' ', '\t'):
+                            seg_end -= 1
+                        elif prev_ch in BRACKET_PAIRS or prev_ch in ('.', ',', '!', '?', ':', ';', '-'):
+                            break
+                        elif _is_digit_char(prev_ch):
+                            break
+                        else:
+                            break
+
             i = seg_end
             segment = line[seg_start:seg_end]
-            result += _py_reverse_segment(segment)
+            result.append(_py_reverse_segment(segment))
         else:
-            result += line[i]
+            result.append(line[i])
             i += 1
-    return result
+
+    return prefix + "".join(result)
 
 
 def py_process_text(text, smart_mode=True):
     """Process Arabic prose. Auto-skip code blocks, etc. if smart_mode is True."""
     lines = text.split('\n')
-    if not smart_mode:
-        return '\n'.join(py_process_line_normal(line) for line in lines)
-
     out = []
     in_code_block = False
     for line in lines:
-        stripped = line.strip()
-        if in_code_block:
-            out.append(line)
-            if "```" in stripped:
-                in_code_block = False
-        else:
-            if stripped.startswith("```"):
-                out.append(py_smart_process_line(line))
-                if stripped.count("```") % 2 != 0:
-                    in_code_block = True
+        if smart_mode:
+            stripped = line.strip()
+            if in_code_block:
+                out.append(line)
+                if "```" in stripped:
+                    in_code_block = False
             else:
-                out.append(py_smart_process_line(line))
+                if stripped.startswith("```"):
+                    out.append(line)
+                    if stripped.count("```") % 2 != 0:
+                        in_code_block = True
+                else:
+                    out.append(py_process_line(line, smart_mode=True))
+        else:
+            out.append(py_process_line(line, smart_mode=False))
     return '\n'.join(out)
 
 py_reverse_arabic_text = py_process_text
@@ -441,14 +487,72 @@ def _split_lines(lines, num_chunks, smart_mode=True):
 def _process_chunk(args):
     """Worker function for multiprocessing."""
     chunk, smart_mode = args
-    if smart_mode:
-        return py_process_text('\n'.join(chunk), smart_mode=True).split('\n')
+    return py_process_text('\n'.join(chunk), smart_mode=smart_mode).split('\n')
+
+
+def py_decide_process_count(text_or_lines, max_processes=None):
+    """
+    Determine the optimal number of worker processes based on text length.
+
+    Balances multiprocessing startup/IPC overhead against parallel speedup:
+    - Short text (< 100 lines and < 5,000 chars): 1 process (overhead exceeds gain)
+    - Medium text (100 - 499 lines): 2 processes
+    - Moderate text (500 - 1,999 lines): 4 processes
+    - Large text (2,000 - 9,999 lines): 8 processes
+    - Very large text (10,000+ lines): 16 processes
+
+    Capped by CPU cores (or max_processes if provided).
+    """
+    if max_processes is not None and max_processes > 0:
+        cpu_limit = max_processes
     else:
-        return [py_process_line_normal(line) for line in chunk]
+        try:
+            cpu_limit = multiprocessing.cpu_count()
+        except Exception:
+            cpu_limit = 4
+
+    cpu_limit = max(1, min(32, cpu_limit))
+
+    if isinstance(text_or_lines, str):
+        n_lines = text_or_lines.count('\n') + 1
+        n_chars = len(text_or_lines)
+    elif isinstance(text_or_lines, list):
+        n_lines = len(text_or_lines)
+        n_chars = sum(len(line) for line in text_or_lines)
+    elif isinstance(text_or_lines, int):
+        n_lines = text_or_lines
+        n_chars = n_lines * 50
+    else:
+        return 1
+
+    if n_lines < 100 and n_chars < 5000:
+        return 1
+
+    if n_lines < 500 and n_chars < 25000:
+        target = 2
+    elif n_lines < 2000 and n_chars < 100000:
+        target = 4
+    elif n_lines < 10000 and n_chars < 500000:
+        target = 8
+    else:
+        target = 16
+
+    return max(1, min(target, cpu_limit))
 
 
-def py_process_text_parallel(text, num_threads=4, smart_mode=True):
+py_get_optimal_process_count = py_decide_process_count
+
+
+def py_process_text_parallel(text, num_threads=0, smart_mode=True):
     """Process text using multiprocessing.Pool (bypasses GIL)."""
+    if num_threads is None or num_threads <= 0:
+        num_threads = py_decide_process_count(text)
+
+    if num_threads < 1:
+        num_threads = 1
+    if num_threads > 32:
+        num_threads = 32
+
     lines = text.split('\n')
     n = len(lines)
 
@@ -468,7 +572,7 @@ def py_process_text_parallel(text, num_threads=4, smart_mode=True):
 
 
 # 1BRC Technique: mmap-based file reading
-def py_process_file_mmap(filepath, num_threads=4, output=None, smart_mode=True):
+def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True):
     """Process file using mmap (zero-copy file access)."""
     if not os.path.exists(filepath):
         print(f"Error: File '{filepath}' not found.", file=sys.stderr)
@@ -489,6 +593,9 @@ def py_process_file_mmap(filepath, num_threads=4, output=None, smart_mode=True):
         return ""
 
     text = raw.decode('utf-8', errors='replace')
+
+    if num_threads is None or num_threads <= 0:
+        num_threads = py_decide_process_count(text)
 
     if num_threads > 1:
         result = py_process_text_parallel(text, num_threads, smart_mode)
@@ -516,12 +623,19 @@ if FAST_MODE:
     do_process_text_parallel = process_text_parallel
     do_has_arabic = has_arabic
     do_process_file = process_file_parallel
+    do_decide_process_count = decide_process_count
+    # Also assign to module level
+    decide_process_count = decide_process_count
+    get_optimal_process_count = get_optimal_process_count
 else:
     do_process_text = py_process_text
     do_process_text_parallel = py_process_text_parallel
     do_has_arabic = py_has_arabic
     do_process_file = py_process_file_mmap
     reverse_arabic_text = py_process_text
+    do_decide_process_count = py_decide_process_count
+    decide_process_count = py_decide_process_count
+    get_optimal_process_count = py_decide_process_count
 
 
 # ══════════════════════════════════════════════════════════════
@@ -544,22 +658,21 @@ def main():
     parser.add_argument('text', nargs='?', help='Arabic text to process')
     parser.add_argument('--file', '-f', help='Process a file (uses mmap for large files)')
     parser.add_argument('--output', '-o', help='Output file (default: stdout)')
-    default_threads = multiprocessing.cpu_count()
-    parser.add_argument('--threads', '-t', type=int, default=default_threads,
-                        help=f'Number of processes (1-32, default: {default_threads})')
+    parser.add_argument('--threads', '-t', type=int, default=None,
+                        help='Number of processes (1-32, default: auto-decided based on text length)')
     parser.add_argument('--benchmark', '-b', action='store_true',
                         help='Run benchmark')
     parser.add_argument('--show-stats', '-s', action='store_true',
                         help='Show performance stats')
     parser.add_argument('--no-smart', action='store_true',
                         help='Disable smart mode (processes everything as text)')
+    parser.add_argument('--stream', '-S', action='store_true',
+                        help='Process stdin line-by-line in real-time (for logs/tail -f)')
     parser.add_argument('--daemon', '-d', action='store_true',
                         help='Use daemon mode (auto-starts if not running)')
     parser.add_argument('--version', '-v', action='version', version='arabic-rtl-processor 1.0.0')
     args = parser.parse_args()
 
-
-    num_threads = max(1, min(32, args.threads))
     mode = "Cython/C" if FAST_MODE else "Pure Python (1BRC-optimized)"
 
     if args.benchmark:
@@ -567,6 +680,16 @@ def main():
         return
 
     smart_mode = not args.no_smart
+
+    # Stream mode: process line-by-line in real time
+    if args.stream:
+        for line in sys.stdin:
+            if line.endswith('\n'):
+                sys.stdout.write(do_process_text(line[:-1], smart_mode) + '\n')
+            else:
+                sys.stdout.write(do_process_text(line, smart_mode))
+            sys.stdout.flush()
+        return
 
     # Daemon mode: send to daemon and exit
     if args.daemon:
@@ -584,6 +707,7 @@ def main():
 
     # File processing (1BRC-style mmap + parallel)
     if args.file:
+        num_threads = max(1, min(32, args.threads)) if args.threads is not None else 0
         result = do_process_file(args.file, num_threads, args.output, smart_mode)
         return
 
@@ -596,9 +720,14 @@ def main():
         parser.print_help()
         return
 
+    if args.threads is not None and args.threads > 0:
+        num_threads = max(1, min(32, args.threads))
+    else:
+        num_threads = do_decide_process_count(text)
+
     start = time.perf_counter()
 
-    if num_threads > 1 and text.count('\n') > 100:
+    if num_threads > 1 and text.count('\n') >= 100:
         result = do_process_text_parallel(text, num_threads, smart_mode)
     else:
         result = do_process_text(text, smart_mode)
