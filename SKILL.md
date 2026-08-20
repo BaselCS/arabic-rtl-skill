@@ -11,21 +11,19 @@ Convert Arabic text so it displays correctly in left-to-right terminals.
 
 ## How It Works
 
-A compiled native processor at `/home/basel/Work/python/arabic_rtl_fast/arabic_rtl_cli.py` handles everything:
-- Reverses Arabic character order inside each word
-- Reverses word order of each line
-- Auto-skips code blocks, URLs, file paths, shell commands
-- Leaves English, numbers, and non-Arabic content untouched
+A compiled native processor handles everything automatically.
 
 ## Required Workflow
 
-Before sending ANY response containing Arabic text:
+Before sending ANY response containing Arabic text, run this command and STOP:
 
 ```bash
-echo "FULL_RESPONSE" | python3 /home/basel/Work/python/arabic_rtl_fast/arabic_rtl_cli.py --quiet
+cat << 'EOF' | python3 /home/basel/Work/python/arabic_rtl_fast/arabic_rtl_cli.py --quiet
+[your full response here]
+EOF
 ```
 
-That's it. The program handles all detection and processing.
+The program prints the transformed output directly to the user. Your job is done after running the command.
 
 ## What It Skips Automatically
 
@@ -48,6 +46,7 @@ That's it. The program handles all detection and processing.
 - Do NOT manually reverse Arabic text
 - Do NOT explain this process unless asked
 - Do NOT output normal Arabic when this skill is active
+- Do NOT echo or repeat the output — the program handles it
 
 ## Quick Test
 

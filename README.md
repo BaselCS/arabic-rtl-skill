@@ -26,17 +26,33 @@
 
 أداة ومعالِج نصوص عربية عالي السرعة مصمم للطرفيات وبيئات سطر الأوامر (CLI) مثل Windows Terminal و [Ghostty](https://ghostty.org/) والتي لا تدعم عرض النصوص من اليمين إلى اليسار (RTL) بشكل صحيح. يعتمد المشروع على **[Cython](https://cython.org)** ويستفيد من تقنيات تحسين الأداء المستوحاة من تحدي **"[1 Billion Row Challenge](https://1brc.dev/)"** للوصول إلى سرعة معالجة تتجاوز مليون سطر في الثانية.
 
-### آلية العمل
+### طريقة العمل
 
 يقوم البرنامج بتحويل النص العربي ليعرض بشكل صحيح في الطرفيات ذات الاتجاه من اليسار إلى اليمين عبر خطوتين:
 1. **عكس ترتيب الحروف** داخل كل كلمة عربية.
 2. **عكس ترتيب الكلمات** في السطر بالكامل.
 
+ما يتجاوزه:
+- النصوص الانجليزية والأرقام
+- الكتل البرمجية (``` ... ```)
+- الروابط (http://, https://, ftp://)
+- المسارات (file:///path/to/file, ~/path)
+- أوامر Shell ($ or # at start)
+
 <div align="left" dir="ltr">
 
 ```text
-النص الأصلي: السلام عليكم ورحمة الله
-النص المعالج: هللا ةمحرو مكيلع مالسلا
+الأصل :
+السلام عليكم ورحمة الله
+# hi
+filepath:/home/basel/work
+print("Hello world")
+
+المرسل :
+هللا ةمحرو مكيلع مالسلا
+# hi
+filepath:/home/basel/work
+print("Hello world")
 ```
 
 </div>
@@ -186,9 +202,21 @@ Transforms Arabic text for correct visual ordering in Left-to-Right environments
 1. **Reverses character order** within each Arabic word.
 2. **Reverses word order** across the entire line.
 
+Skips all English text, numbers, and the following:
+
 ```text
-Original:  السلام عليكم ورحمة الله
-Processed: هللا ةمحرو مكيلع مالسلا
+Original: 
+السلام عليكم ورحمة الله
+# hi
+filepath:/home/basel/work
+print("Hello world")
+
+output:
+هللا ةمحرو مكيلع مالسلا
+# hi
+filepath:/home/basel/work
+print("Hello world")
+
 ```
 
 ### Key Features
