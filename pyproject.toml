@@ -7,7 +7,7 @@ name = "arabic-rtl-processor"
 version = "1.0.0"
 description = "Blazing fast Arabic RTL text processor for LTR terminals"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "Basel"}
@@ -16,7 +16,6 @@ keywords = ["arabic", "rtl", "bidi", "terminal", "cython", "performance"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -35,3 +34,6 @@ Issues = "https://github.com/baselCS/arabic-rtl-processor/issues"
 
 [project.scripts]
 arabic-rtl = "arabic_rtl_cli:main"
+
+[tool.setuptools]
+py-modules = ["arabic_rtl_cli"]

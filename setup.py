@@ -1,37 +1,33 @@
 from setuptools import setup, Extension
-from Cython.Build import cythonize
 import os
 
-# Optimize for native CPU, maximum optimization
-os.environ['CFLAGS'] = '-march=native -O3 -ffast-math -flto -funroll-loops'
+try:
+    from Cython.Build import cythonize
+    USE_CYTHON = True
+except ImportError:
+    USE_CYTHON = False
+
+ext = ".pyx" if USE_CYTHON else ".c"
+
+# Optional native CPU tuning if requested
+extra_compile = ['-O3', '-ffast-math', '-flto', '-funroll-loops', '-fomit-frame-pointer', '-fno-exceptions']
+extra_link = ['-O3', '-flto']
+
+if os.environ.get('ENABLE_NATIVE_TUNING') == '1':
+    extra_compile.append('-march=native')
+    extra_link.append('-march=native')
 
 extensions = [
     Extension(
         "arabic_rtl",
-        sources=["arabic_rtl.pyx"],
-        extra_compile_args=[
-            '-march=native',
-            '-O3',
-            '-ffast-math',
-            '-flto',
-            '-funroll-loops',
-            '-fomit-frame-pointer',
-            '-fno-exceptions',
-        ],
-        extra_link_args=[
-            '-march=native',
-            '-O3',
-            '-flto',
-        ],
+        sources=[f"arabic_rtl{ext}"],
+        extra_compile_args=extra_compile,
+        extra_link_args=extra_link,
     )
 ]
 
-setup(
-    name="arabic_rtl_fast",
-    version="1.0.0",
-    description="Blazing fast Arabic RTL text processor for LTR terminals",
-    author="BaselCS",
-    ext_modules=cythonize(
+if USE_CYTHON:
+    ext_modules = cythonize(
         extensions,
         compiler_directives={
             'language_level': '3',
@@ -44,6 +40,16 @@ setup(
             'optimize.use_switch': True,
             'optimize.unpack_method_calls': True,
         },
-    ),
+    )
+else:
+    ext_modules = extensions
+
+setup(
+    name="arabic-rtl-processor",
+    version="1.0.0",
+    description="Blazing fast Arabic RTL text processor for LTR terminals",
+    author="BaselCS",
+    ext_modules=ext_modules,
     python_requires='>=3.10',
 )
+

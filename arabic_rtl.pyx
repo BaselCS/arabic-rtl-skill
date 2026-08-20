@@ -99,101 +99,18 @@ init_arabic_bitmap()
 # For very common short Arabic words, pre-compute the reversal
 # This is like the floats{} lookup table in 1BRC
 
-cdef str reverse_word(str word):
-    """Reverse characters in a single word."""
-    cdef Py_ssize_t length = len(word)
-    if length <= 1:
-        return word
-    return word[::-1]
-
-
 # ══════════════════════════════════════════════════════════════
-# Core processing function (Cython-optimized)
+# Core processing functions
 # ══════════════════════════════════════════════════════════════
 
-cdef str process_line_fast(str line):
-    """Process a single line with bitmap-based Arabic detection."""
-    cdef list words = []
-    cdef str word
-    cdef str reversed_word
-    cdef bint has_arabic
-    cdef Py_ssize_t i, j, length
-    cdef Py_UCS4 ch
 
-    if not line:
-        return line
-
-    # Split on whitespace (like 1BRC's partition approach)
-    parts = line.split()
-    cdef Py_ssize_t nwords = len(parts)
-
-    for i in range(nwords):
-        word = parts[i]
-        length = len(word)
-
-        if length == 0:
-            continue
-
-        # Check if word contains Arabic (bitmap lookup)
-        has_arabic = False
-        for j in range(length):
-            ch = <unsigned int>ord(word[j])
-            if is_arabic_fast(ch):
-                has_arabic = True
-                break
-
-        if has_arabic:
-            # Separate trailing punctuation
-            end = length
-            while end > 1:
-                ch = <unsigned int>ord(word[end - 1])
-                if not is_arabic_fast(ch):
-                    break
-                # Check if it's actually Arabic punctuation (0x060C, 0x061B, 0x061F, 0x0640)
-                if ch not in (0x060C, 0x061B, 0x061F, 0x0640):
-                    break
-                end -= 1
-
-            core = word[:end]
-            trail = word[end:]
-            # Reverse Arabic characters in core
-            reversed_word = core[::-1]
-            words.append(reversed_word + trail)
-        else:
-            words.append(word)
-
-    # Reverse word order (like 1BRC's final assembly)
-    words.reverse()
-    return ' '.join(words)
-
-
-# ══════════════════════════════════════════════════════════════
-# Public API
-# ══════════════════════════════════════════════════════════════
-
-def reverse_arabic_text(str text):
-    """
-    Process Arabic RTL text for LTR terminal display.
-
-    1BRC optimizations:
-    - Bitmap lookup for O(1) Arabic detection
-    - Pre-split on whitespace (no regex)
-    - Minimal Python object creation
-    """
-    cdef list lines = text.split('\n')
-    cdef list out = []
-    for line in lines:
-        out.append(process_line_fast(line))
-    return '\n'.join(out)
-
-
-def reverse_arabic_batch(list texts, int num_threads=4):
+def process_batch(list texts, int num_threads=4, bint smart_mode=True):
     """Process multiple strings."""
     cdef Py_ssize_t n = len(texts)
     cdef list results = [None] * n
     cdef Py_ssize_t i
     for i in range(n):
-        results[i] = reverse_arabic_text(texts[i])
+        results[i] = process_text(texts[i], smart_mode)
     return results
 
 
@@ -216,35 +133,6 @@ def has_arabic(str text):
 # Memory-mapped files for zero-copy access
 # ══════════════════════════════════════════════════════════════
 
-def process_file_mmap(str filepath, int num_threads=4):
-    """
-    Process a file using mmap (like 1BRC's binary file reading).
-
-    For large files, mmap is faster than read() because:
-    - No data copying (zero-copy)
-    - OS handles paging
-    - Works well with multiprocessing
-    """
-    cdef bytes raw
-    cdef str text
-
-    with open(filepath, 'rb') as f:
-        # Use mmap for large files (>1MB)
-        file_size = os.path.getsize(filepath)
-        if file_size > 1_000_000:
-            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                raw = mm[:]
-        else:
-            raw = f.read()
-
-    text = raw.decode('utf-8', errors='replace')
-
-    if num_threads > 1:
-        return reverse_arabic_text_parallel(text, num_threads)
-    else:
-        return reverse_arabic_text(text)
-
-
 # ══════════════════════════════════════════════════════════════
 # 1BRC TECHNIQUE 4: multiprocessing.Pool (bypass GIL)
 # Split text into chunks and process in parallel
@@ -253,7 +141,10 @@ def process_file_mmap(str filepath, int num_threads=4):
 cdef list split_lines(list lines, int num_chunks):
     """Split lines into roughly equal chunks."""
     cdef Py_ssize_t n = len(lines)
-    cdef Py_ssize_t chunk_size = n // num_chunks
+    # Bug fix #4: cap num_chunks to n so chunk_size never becomes 0
+    if n > 0 and num_chunks > n:
+        num_chunks = n
+    cdef Py_ssize_t chunk_size = n // num_chunks if num_chunks > 0 else n
     cdef list chunks = []
     cdef Py_ssize_t start = 0
 
@@ -265,12 +156,17 @@ cdef list split_lines(list lines, int num_chunks):
     return chunks
 
 
-def _process_chunk(list chunk):
+def _process_chunk(tuple args):
     """Worker function for multiprocessing (must be top-level for pickling)."""
-    return [process_line_fast(line) for line in chunk]
+    cdef list chunk = args[0]
+    cdef bint smart_mode = args[1]
+    if smart_mode:
+        return [_smart_process_line(line) for line in chunk]
+    else:
+        return [_process_line_normal(line) for line in chunk]
 
 
-def reverse_arabic_text_parallel(str text, int num_threads=4):
+def process_text_parallel(str text, int num_threads=4, bint smart_mode=True):
     """
     Process text using multiprocessing.Pool (1BRC technique).
 
@@ -278,22 +174,23 @@ def reverse_arabic_text_parallel(str text, int num_threads=4):
     """
     if num_threads < 1:
         num_threads = 1
-    if num_threads > 8:
-        num_threads = 8
+    if num_threads > 32:
+        num_threads = 32
 
     cdef list lines = text.split('\n')
     cdef Py_ssize_t n = len(lines)
 
     if n < 100 or num_threads == 1:
         # Not worth parallelizing
-        return reverse_arabic_text(text)
+        return process_text(text, smart_mode)
 
     # Split into chunks (like 1BRC's get_parts function)
     chunks = split_lines(lines, num_threads)
+    chunk_args = [(chunk, smart_mode) for chunk in chunks]
 
     # Process in parallel (bypasses GIL)
     with multiprocessing.Pool(num_threads) as pool:
-        results = pool.map(_process_chunk, chunks)
+        results = pool.map(_process_chunk, chunk_args)
 
     # Flatten results (preserving order)
     out = []
@@ -303,7 +200,7 @@ def reverse_arabic_text_parallel(str text, int num_threads=4):
     return '\n'.join(out)
 
 
-def process_file_parallel(str filepath, int num_threads=4, str output=None):
+def process_file_parallel(str filepath, int num_threads=4, str output=None, bint smart_mode=True):
     """
     1BRC-style parallel file processing.
 
@@ -312,24 +209,32 @@ def process_file_parallel(str filepath, int num_threads=4, str output=None):
     import time
     start = time.perf_counter()
 
-    file_size = os.path.getsize(filepath)
+    if not os.path.exists(filepath):
+        print(f"Error: File '{filepath}' not found.", file=sys.stderr)
+        return ""
 
-    # Read file (mmap for large files)
-    if file_size > 1_000_000:
-        with open(filepath, 'rb') as f:
-            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                raw = mm[:]
-    else:
-        with open(filepath, 'rb') as f:
-            raw = f.read()
+    try:
+        file_size = os.path.getsize(filepath)
+
+        # Read file (mmap for large files)
+        if file_size > 1_000_000:
+            with open(filepath, 'rb') as f:
+                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                    raw = mm[:]
+        else:
+            with open(filepath, 'rb') as f:
+                raw = f.read()
+    except OSError as e:
+        print(f"Error: Could not read file '{filepath}': {e}", file=sys.stderr)
+        return ""
 
     text = raw.decode('utf-8', errors='replace')
 
     # Process
     if num_threads > 1:
-        result = reverse_arabic_text_parallel(text, num_threads)
+        result = process_text_parallel(text, num_threads, smart_mode)
     else:
-        result = reverse_arabic_text(text)
+        result = process_text(text, smart_mode)
 
     elapsed = time.perf_counter() - start
 
@@ -361,6 +266,8 @@ cdef str _smart_process_line(str line):
     cdef Py_ssize_t i = 0
     cdef str result = ""
     cdef str segment
+    cdef Py_ssize_t seg_i, seg_len, word_start, seg_start, seg_end, last_arabic_i
+    cdef unsigned int ch
 
     while i < length:
         # Skip code blocks (``` ... ```)
@@ -413,23 +320,41 @@ cdef str _smart_process_line(str line):
         if is_arabic_fast(ch):
             # Find Arabic segment
             seg_start = i
+            last_arabic_i = i
             while i < length:
                 ch = <unsigned int>ord(line[i])
-                if not is_arabic_fast(ch) and ch != 0x20:
+                if is_arabic_fast(ch):
+                    last_arabic_i = i
+                elif ch != 0x20:
                     break
                 i += 1
-            # Reverse the Arabic segment
-            segment = line[seg_start:i]
-            words = segment.split()
+            seg_end = last_arabic_i + 1
+            i = seg_end
+            # Reverse the Arabic segment preserving whitespace exactly
+            segment = line[seg_start:seg_end]
             rev_words = []
-            for word in words:
-                wlen = len(word)
-                if wlen > 1:
-                    rev_words.append(word[::-1])
+            
+            seg_i = 0
+            seg_len = len(segment)
+            
+            while seg_i < seg_len:
+                if segment[seg_i] == ' ':
+                    word_start = seg_i
+                    while seg_i < seg_len and segment[seg_i] == ' ':
+                        seg_i += 1
+                    rev_words.append(segment[word_start:seg_i])
                 else:
-                    rev_words.append(word)
+                    word_start = seg_i
+                    while seg_i < seg_len and segment[seg_i] != ' ':
+                        seg_i += 1
+                    word = segment[word_start:seg_i]
+                    if len(word) > 1:
+                        rev_words.append(word[::-1])
+                    else:
+                        rev_words.append(word)
+            
             rev_words.reverse()
-            result += ' '.join(rev_words)
+            result += ''.join(rev_words)
         else:
             result += line[i]
             i += 1
@@ -450,13 +375,77 @@ cdef bint _starts_with(str s, str prefix, Py_ssize_t pos=0):
     return True
 
 
-def smart_process(str text):
+cdef str _process_line_normal(str line):
+    """Process a line without smart skipping."""
+    cdef Py_ssize_t length = len(line)
+    cdef Py_ssize_t i = 0
+    cdef str result = ""
+    cdef str segment
+    cdef Py_ssize_t seg_i, seg_len, word_start, seg_start, seg_end, last_arabic_i
+    cdef unsigned int ch
+
+    while i < length:
+        ch = <unsigned int>ord(line[i])
+        if is_arabic_fast(ch):
+            # Find Arabic segment
+            seg_start = i
+            last_arabic_i = i
+            while i < length:
+                ch = <unsigned int>ord(line[i])
+                if is_arabic_fast(ch):
+                    last_arabic_i = i
+                elif ch != 0x20:
+                    break
+                i += 1
+            seg_end = last_arabic_i + 1
+            i = seg_end
+            # Reverse the Arabic segment preserving whitespace exactly
+            segment = line[seg_start:seg_end]
+            rev_words = []
+            
+            seg_i = 0
+            seg_len = len(segment)
+            
+            while seg_i < seg_len:
+                if segment[seg_i] == ' ':
+                    word_start = seg_i
+                    while seg_i < seg_len and segment[seg_i] == ' ':
+                        seg_i += 1
+                    rev_words.append(segment[word_start:seg_i])
+                else:
+                    word_start = seg_i
+                    while seg_i < seg_len and segment[seg_i] != ' ':
+                        seg_i += 1
+                    word = segment[word_start:seg_i]
+                    if len(word) > 1:
+                        rev_words.append(word[::-1])
+                    else:
+                        rev_words.append(word)
+            
+            rev_words.reverse()
+            result += ''.join(rev_words)
+        else:
+            result += line[i]
+            i += 1
+
+    return result
+
+
+def process_text(str text, bint smart_mode=True):
     """
-    Smart mode: auto-skip code blocks, URLs, paths, commands.
-    Only processes Arabic prose.
+    Process Arabic prose.
+    If smart_mode is True, auto-skips code blocks, URLs, paths, commands.
     """
     cdef list lines = text.split('\n')
     cdef list out = []
     for line in lines:
-        out.append(_smart_process_line(line))
+        if smart_mode:
+            out.append(_smart_process_line(line))
+        else:
+            out.append(_process_line_normal(line))
     return '\n'.join(out)
+
+
+# Alias for backward compatibility & README matching
+reverse_arabic_text = process_text
+

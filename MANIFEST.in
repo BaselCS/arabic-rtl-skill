@@ -3,5 +3,9 @@ include README.md
 include requirements.txt
 include SKILL.md
 include arabic_rtl.pyx
+include arabic_rtl.c
 include arabic_rtl_cli.py
 include setup.py
+include pyproject.toml
+include test_arabic_rtl.py
+

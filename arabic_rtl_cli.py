@@ -28,17 +28,17 @@ import multiprocessing
 # Try compiled Cython module first
 try:
     from arabic_rtl import (
-        reverse_arabic_text,
-        reverse_arabic_batch,
+        process_text,
+        process_batch,
         has_arabic,
-        reverse_arabic_text_parallel,
+        process_text_parallel,
         process_file_parallel,
-        process_file_mmap,
-        smart_process,
+        reverse_arabic_text,
     )
     FAST_MODE = True
 except ImportError:
     FAST_MODE = False
+
 
 
 # ══════════════════════════════════════════════════════════════
@@ -75,35 +75,7 @@ def _is_arabic_punct(ch):
     return ord(ch) in (0x060C, 0x061B, 0x061F, 0x0640)
 
 
-def py_process_line(line):
-    """Process a single line with bitmap-based detection."""
-    if not line:
-        return line
-
-    words = []
-    for word in line.split():
-        has_arab = False
-        for ch in word:
-            if _is_arabic(ch):
-                has_arab = True
-                break
-
-        if has_arab:
-            end = len(word)
-            while end > 1 and _is_arabic_punct(word[end - 1]):
-                end -= 1
-            core = word[:end]
-            trail = word[end:]
-            words.append(core[::-1] + trail)
-        else:
-            words.append(word)
-
-    words.reverse()
-    return ' '.join(words)
-
-
-def py_reverse_arabic_text(text):
-    return '\n'.join(py_process_line(line) for line in text.split('\n'))
+# Non-smart processing methods removed.
 
 
 def py_has_arabic(text):
@@ -171,23 +143,38 @@ def py_smart_process_line(line):
         if _is_arabic(ch):
             # Find Arabic segment
             seg_start = i
+            last_arabic_i = i
             while i < length:
                 ch = line[i]
-                if not _is_arabic(ch) and ch != ' ':
+                if _is_arabic(ch):
+                    last_arabic_i = i
+                elif ch != ' ':
                     break
                 i += 1
-            # Reverse the Arabic segment
-            segment = line[seg_start:i]
-            words = segment.split()
+            seg_end = last_arabic_i + 1
+            i = seg_end
+            # Reverse the Arabic segment preserving whitespace exactly
+            segment = line[seg_start:seg_end]
             rev_words = []
-            for word in words:
-                wlen = len(word)
-                if wlen > 1:
-                    rev_words.append(word[::-1])
+            seg_i = 0
+            seg_len = len(segment)
+            while seg_i < seg_len:
+                if segment[seg_i] == ' ':
+                    word_start = seg_i
+                    while seg_i < seg_len and segment[seg_i] == ' ':
+                        seg_i += 1
+                    rev_words.append(segment[word_start:seg_i])
                 else:
-                    rev_words.append(word)
+                    word_start = seg_i
+                    while seg_i < seg_len and segment[seg_i] != ' ':
+                        seg_i += 1
+                    word = segment[word_start:seg_i]
+                    if len(word) > 1:
+                        rev_words.append(word[::-1])
+                    else:
+                        rev_words.append(word)
             rev_words.reverse()
-            result += ' '.join(rev_words)
+            result += ''.join(rev_words)
         else:
             result += line[i]
             i += 1
@@ -195,14 +182,70 @@ def py_smart_process_line(line):
     return result
 
 
-def py_smart_process(text):
-    """Smart mode: auto-skip code blocks, URLs, paths, commands."""
-    return '\n'.join(py_smart_process_line(line) for line in text.split('\n'))
+def py_process_line_normal(line):
+    """Process a line without smart skipping."""
+    length = len(line)
+    i = 0
+    result = ""
+
+    while i < length:
+        ch = line[i]
+        if _is_arabic(ch):
+            seg_start = i
+            last_arabic_i = i
+            while i < length:
+                ch = line[i]
+                if _is_arabic(ch):
+                    last_arabic_i = i
+                elif ch != ' ':
+                    break
+                i += 1
+            seg_end = last_arabic_i + 1
+            i = seg_end
+            segment = line[seg_start:seg_end]
+            rev_words = []
+            seg_i = 0
+            seg_len = len(segment)
+            while seg_i < seg_len:
+                if segment[seg_i] == ' ':
+                    word_start = seg_i
+                    while seg_i < seg_len and segment[seg_i] == ' ':
+                        seg_i += 1
+                    rev_words.append(segment[word_start:seg_i])
+                else:
+                    word_start = seg_i
+                    while seg_i < seg_len and segment[seg_i] != ' ':
+                        seg_i += 1
+                    word = segment[word_start:seg_i]
+                    if len(word) > 1:
+                        rev_words.append(word[::-1])
+                    else:
+                        rev_words.append(word)
+            rev_words.reverse()
+            result += ''.join(rev_words)
+        else:
+            result += line[i]
+            i += 1
+    return result
+
+
+def py_process_text(text, smart_mode=True):
+    """Process Arabic prose. Auto-skip code blocks, etc. if smart_mode is True."""
+    lines = text.split('\n')
+    if smart_mode:
+        return '\n'.join(py_smart_process_line(line) for line in lines)
+    else:
+        return '\n'.join(py_process_line_normal(line) for line in lines)
+
+py_reverse_arabic_text = py_process_text
+
 
 
 # 1BRC Technique: Chunk-based splitting for multiprocessing
 def _split_lines(lines, num_chunks):
     n = len(lines)
+    # Bug fix #4: cap num_chunks to n so chunk_size never becomes 0
+    num_chunks = min(num_chunks, n) if n > 0 else 1
     chunk_size = n // num_chunks
     chunks = []
     start = 0
@@ -214,22 +257,28 @@ def _split_lines(lines, num_chunks):
     return chunks
 
 
-def _process_chunk(chunk):
+def _process_chunk(args):
     """Worker function for multiprocessing."""
-    return [py_process_line(line) for line in chunk]
+    chunk, smart_mode = args
+    if smart_mode:
+        return [py_smart_process_line(line) for line in chunk]
+    else:
+        return [py_process_line_normal(line) for line in chunk]
 
 
-def py_reverse_parallel(text, num_threads=4):
+def py_process_text_parallel(text, num_threads=4, smart_mode=True):
     """Process text using multiprocessing.Pool (bypasses GIL)."""
     lines = text.split('\n')
     n = len(lines)
 
     if n < 100 or num_threads <= 1:
-        return py_reverse_arabic_text(text)
+        return py_process_text(text, smart_mode)
 
     chunks = _split_lines(lines, num_threads)
+    chunk_args = [(chunk, smart_mode) for chunk in chunks]
+
     with multiprocessing.Pool(num_threads) as pool:
-        results = pool.map(_process_chunk, chunks)
+        results = pool.map(_process_chunk, chunk_args)
 
     out = []
     for chunk_result in results:
@@ -238,24 +287,41 @@ def py_reverse_parallel(text, num_threads=4):
 
 
 # 1BRC Technique: mmap-based file reading
-def py_process_file_mmap(filepath, num_threads=4):
+def py_process_file_mmap(filepath, num_threads=4, output=None, smart_mode=True):
     """Process file using mmap (zero-copy file access)."""
-    file_size = os.path.getsize(filepath)
+    if not os.path.exists(filepath):
+        print(f"Error: File '{filepath}' not found.", file=sys.stderr)
+        return ""
 
-    if file_size > 1_000_000:
-        with open(filepath, 'rb') as f:
-            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
-                raw = mm[:]
-    else:
-        with open(filepath, 'rb') as f:
-            raw = f.read()
+    try:
+        file_size = os.path.getsize(filepath)
+
+        if file_size > 1_000_000:
+            with open(filepath, 'rb') as f:
+                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                    raw = mm[:]
+        else:
+            with open(filepath, 'rb') as f:
+                raw = f.read()
+    except OSError as e:
+        print(f"Error: Could not read file '{filepath}': {e}", file=sys.stderr)
+        return ""
 
     text = raw.decode('utf-8', errors='replace')
 
     if num_threads > 1:
-        return py_reverse_parallel(text, num_threads)
+        result = py_process_text_parallel(text, num_threads, smart_mode)
     else:
-        return py_reverse_arabic_text(text)
+        result = py_process_text(text, smart_mode)
+
+    # Bug fix #5: handle output file (mirrors process_file_parallel behaviour)
+    if output:
+        with open(output, 'w', encoding='utf-8') as f:
+            f.write(result)
+    else:
+        print(result)
+
+    return result
 
 
 # ══════════════════════════════════════════════════════════════
@@ -263,17 +329,16 @@ def py_process_file_mmap(filepath, num_threads=4):
 # ══════════════════════════════════════════════════════════════
 
 if FAST_MODE:
-    do_reverse = reverse_arabic_text
-    do_reverse_parallel = reverse_arabic_text_parallel
+    do_process_text = process_text
+    do_process_text_parallel = process_text_parallel
     do_has_arabic = has_arabic
     do_process_file = process_file_parallel
-    do_smart = smart_process
 else:
-    do_reverse = py_reverse_arabic_text
-    do_reverse_parallel = py_reverse_parallel
+    do_process_text = py_process_text
+    do_process_text_parallel = py_process_text_parallel
     do_has_arabic = py_has_arabic
     do_process_file = py_process_file_mmap
-    do_smart = py_smart_process
+    reverse_arabic_text = py_process_text
 
 
 # ══════════════════════════════════════════════════════════════
@@ -287,26 +352,31 @@ def main():
     parser.add_argument('text', nargs='?', help='Arabic text to process')
     parser.add_argument('--file', '-f', help='Process a file (uses mmap for large files)')
     parser.add_argument('--output', '-o', help='Output file (default: stdout)')
-    parser.add_argument('--threads', '-t', type=int, default=1,
-                        help='Number of processes (1-8, default: 1)')
-    parser.add_argument('--no-smart', action='store_true',
-                        help='Disable smart mode (skip code/URLs/paths automatically)')
+    default_threads = multiprocessing.cpu_count()
+    parser.add_argument('--threads', '-t', type=int, default=default_threads,
+                        help=f'Number of processes (1-32, default: {default_threads})')
     parser.add_argument('--benchmark', '-b', action='store_true',
                         help='Run benchmark')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress stats')
+    parser.add_argument('--no-smart', action='store_true',
+                        help='Disable smart mode (processes everything as text)')
+    parser.add_argument('--version', '-v', action='version', version='arabic-rtl-processor 1.0.0')
     args = parser.parse_args()
 
-    num_threads = max(1, min(8, args.threads))
+
+    num_threads = max(1, min(32, args.threads))
     mode = "Cython/C" if FAST_MODE else "Pure Python (1BRC-optimized)"
 
     if args.benchmark:
         run_benchmark()
         return
 
+    smart_mode = not args.no_smart
+
     # File processing (1BRC-style mmap + parallel)
     if args.file:
-        result = do_process_file(args.file, num_threads, args.output)
+        result = do_process_file(args.file, num_threads, args.output, smart_mode)
         return
 
     # Text input
@@ -320,14 +390,10 @@ def main():
 
     start = time.perf_counter()
 
-    # Smart mode is default, --no-smart disables it
-    if args.no_smart:
-        if num_threads > 1 and text.count('\n') > 100:
-            result = do_reverse_parallel(text, num_threads)
-        else:
-            result = do_reverse(text)
+    if num_threads > 1 and text.count('\n') > 100:
+        result = do_process_text_parallel(text, num_threads, smart_mode)
     else:
-        result = do_smart(text)
+        result = do_process_text(text, smart_mode)
 
     elapsed = time.perf_counter() - start
 
@@ -372,8 +438,8 @@ def run_benchmark():
     full_text = '\n'.join(test_lines)
     for nt in [1, 2, 4, 8]:
         start = time.perf_counter()
-        result_text = do_reverse_parallel(full_text, nt) if nt > 1 else \
-                      do_reverse(full_text)
+        result_text = do_process_text_parallel(full_text, nt) if nt > 1 else \
+                      do_process_text(full_text)
         elapsed = time.perf_counter() - start
         result_lines = result_text.split('\n')
         throughput = len(test_lines) / elapsed if elapsed > 0 else 0
@@ -392,7 +458,7 @@ def run_benchmark():
     print("  Correctness:")
     all_pass = True
     for inp, expected in tests:
-        got = do_reverse(inp)
+        got = do_process_text(inp)
         status = "PASS" if got == expected else "FAIL"
         if status == "FAIL":
             all_pass = False
