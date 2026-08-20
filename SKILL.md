@@ -1,67 +1,58 @@
 ---
 name: arabic-rtl
-description: Process Arabic text for LTR terminal display using compiled Cython processor. Use for ALL Arabic output.
+description: Process Arabic text for LTR terminal display. Use for ALL Arabic output.
 ---
 
 # Arabic RTL Processor
 
 ## Purpose
 
-Convert Arabic text so it displays correctly in left-to-right terminals using a compiled Cython processor (1M+ lines/sec).
+Convert Arabic text so it displays correctly in left-to-right terminals.
 
 ## How It Works
 
-A native compiled processor handles the transformation:
-1. Reverses character order inside each Arabic word
-2. Reverses word order of the entire line
+A compiled native processor at `/home/basel/Work/python/arabic_rtl_fast/arabic_rtl_cli.py` handles everything:
+- Reverses Arabic character order inside each word
+- Reverses word order of each line
+- Auto-skips code blocks, URLs, file paths, shell commands
+- Leaves English, numbers, and non-Arabic content untouched
 
 ## Required Workflow
 
-When your reply contains Arabic text:
-
-1. Write your full response with normal Arabic text
-2. Before sending, pipe ONLY the Arabic portions through the processor:
+Before sending ANY response containing Arabic text:
 
 ```bash
-echo "YOUR_ARABIC_TEXT" | python3 arabic_rtl_cli.py --quiet
+echo "FULL_RESPONSE" | python3 /home/basel/Work/python/arabic_rtl_fast/arabic_rtl_cli.py --quiet
 ```
 
-3. Replace the Arabic text in your response with the processed output
+That's it. The program handles all detection and processing.
 
-## Examples
+## What It Skips Automatically
 
-Input to processor:
-```
-السلام عليكم ورحمة الله
-```
+- Code blocks (``` ... ```)
+- URLs (http://, https://, ftp://)
+- File paths (/path/to/file, ~/path)
+- Shell commands ($ or # at start)
+- English text and numbers
 
-Output from processor:
-```
-هللا ةمحرو مكيلع مالسلا
-```
+## What It Processes
+
+- All Arabic prose
+- Arabic in headings, bullets, questions
+- Inline Arabic phrases
+- Single Arabic words
 
 ## Rules
 
-- Process ALL Arabic prose, headings, bullets, questions, explanations
-- Keep English text, numbers, code blocks, URLs, file paths, JSON, shell commands UNCHANGED
-- Keep punctuation attached to its token
-- Do NOT process text inside code blocks
+- Pipe your ENTIRE response through the program
+- Do NOT manually reverse Arabic text
 - Do NOT explain this process unless asked
 - Do NOT output normal Arabic when this skill is active
 
 ## Quick Test
 
 ```bash
-echo "بسم الله الرحمن الرحيم" | python3 arabic_rtl_cli.py --quiet
+echo "الحمد لله رب العالمين" | python3 /home/basel/Work/python/arabic_rtl_fast/arabic_rtl_cli.py --quiet
 ```
 
-Expected output:
-```
-ميحرلا نمحرلا هللا مسب
-```
-
-## Performance
-
-- Single-threaded: ~1M lines/sec (Cython compiled, -O3, bitmap lookup)
-- Multithreading: `--threads N` for large files (N=1-8)
-- File processing: `--file input.txt` (mmap for large files)
+Expected: `نيملاعلا بر هلل دمحلا`

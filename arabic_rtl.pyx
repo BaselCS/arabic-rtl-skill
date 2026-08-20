@@ -349,3 +349,114 @@ def process_file_parallel(str filepath, int num_threads=4, str output=None):
           file=sys.stderr)
 
     return result
+
+
+# ══════════════════════════════════════════════════════════════
+# SMART MODE: Auto-skip non-Arabic content
+# ══════════════════════════════════════════════════════════════
+
+cdef str _smart_process_line(str line):
+    """Process a line, skipping code blocks, URLs, paths, commands."""
+    cdef Py_ssize_t length = len(line)
+    cdef Py_ssize_t i = 0
+    cdef str result = ""
+    cdef str segment
+
+    while i < length:
+        # Skip code blocks (``` ... ```)
+        if _starts_with(line, "```", i):
+            end = line.find("```", i + 3)
+            if end == -1:
+                result += line[i:]
+                return result
+            else:
+                result += line[i:end + 3]
+                i = end + 3
+                continue
+
+        # Skip inline code (` ... `)
+        if line[i] == '`':
+            end = line.find('`', i + 1)
+            if end == -1:
+                result += line[i:]
+                return result
+            else:
+                result += line[i:end + 1]
+                i = end + 1
+                continue
+
+        # Skip URLs
+        if _starts_with(line, "http://", i) or _starts_with(line, "https://", i) or _starts_with(line, "ftp://", i):
+            end = i
+            while end < length and line[end] not in (' ', '\t', '\n', '\r', ')', ']', '>'):
+                end += 1
+            result += line[i:end]
+            i = end
+            continue
+
+        # Skip file paths (starting with / or ~/)
+        if (i == 0 or line[i-1] == ' ') and (_starts_with(line, "/", i) or _starts_with(line, "~/", i)):
+            end = i
+            while end < length and line[end] not in (' ', '\t', '\n', '\r'):
+                end += 1
+            result += line[i:end]
+            i = end
+            continue
+
+        # Skip shell commands ($ or # at start)
+        if i == 0 and line[i] in ('$', '#'):
+            result += line[i:]
+            return result
+
+        # Process this character normally
+        ch = <unsigned int>ord(line[i])
+        if is_arabic_fast(ch):
+            # Find Arabic segment
+            seg_start = i
+            while i < length:
+                ch = <unsigned int>ord(line[i])
+                if not is_arabic_fast(ch) and ch != 0x20:
+                    break
+                i += 1
+            # Reverse the Arabic segment
+            segment = line[seg_start:i]
+            words = segment.split()
+            rev_words = []
+            for word in words:
+                wlen = len(word)
+                if wlen > 1:
+                    rev_words.append(word[::-1])
+                else:
+                    rev_words.append(word)
+            rev_words.reverse()
+            result += ' '.join(rev_words)
+        else:
+            result += line[i]
+            i += 1
+
+    return result
+
+
+cdef bint _starts_with(str s, str prefix, Py_ssize_t pos=0):
+    """Fast prefix check."""
+    cdef Py_ssize_t plen = len(prefix)
+    cdef Py_ssize_t slen = len(s)
+    if pos + plen > slen:
+        return False
+    cdef Py_ssize_t i
+    for i in range(plen):
+        if s[pos + i] != prefix[i]:
+            return False
+    return True
+
+
+def smart_process(str text):
+    """
+    Smart mode: auto-skip code blocks, URLs, paths, commands.
+    Only processes Arabic prose.
+    """
+    cdef list lines = text.split('\n')
+    cdef list out = []
+    for line in lines:
+        out.append(_smart_process_line(line))
+    return '\n'.join(out)

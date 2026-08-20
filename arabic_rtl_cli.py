@@ -34,6 +34,7 @@ try:
         reverse_arabic_text_parallel,
         process_file_parallel,
         process_file_mmap,
+        smart_process,
     )
     FAST_MODE = True
 except ImportError:
@@ -109,6 +110,96 @@ def py_has_arabic(text):
     return any(_is_arabic(c) for c in text)
 
 
+# ══════════════════════════════════════════════════════════════
+# SMART MODE (Pure Python fallback)
+# ══════════════════════════════════════════════════════════════
+
+def py_smart_process_line(line):
+    """Process a line, skipping code blocks, URLs, paths, commands."""
+    length = len(line)
+    i = 0
+    result = ""
+
+    while i < length:
+        # Skip code blocks (``` ... ```)
+        if line[i:i+3] == "```":
+            end = line.find("```", i + 3)
+            if end == -1:
+                result += line[i:]
+                return result
+            else:
+                result += line[i:end + 3]
+                i = end + 3
+                continue
+
+        # Skip inline code (` ... `)
+        if line[i] == '`':
+            end = line.find('`', i + 1)
+            if end == -1:
+                result += line[i:]
+                return result
+            else:
+                result += line[i:end + 1]
+                i = end + 1
+                continue
+
+        # Skip URLs
+        if line[i:i+7] == "http://" or line[i:i+8] == "https://" or line[i:i+6] == "ftp://":
+            end = i
+            while end < length and line[end] not in (' ', '\t', '\n', '\r', ')', ']', '>'):
+                end += 1
+            result += line[i:end]
+            i = end
+            continue
+
+        # Skip file paths (starting with / or ~/)
+        if (i == 0 or line[i-1] == ' ') and (line[i] == '/' or line[i:i+2] == '~/'):
+            end = i
+            while end < length and line[end] not in (' ', '\t', '\n', '\r'):
+                end += 1
+            result += line[i:end]
+            i = end
+            continue
+
+        # Skip shell commands ($ or # at start)
+        if i == 0 and line[i] in ('$', '#'):
+            result += line[i:]
+            return result
+
+        # Process this character normally
+        ch = line[i]
+        if _is_arabic(ch):
+            # Find Arabic segment
+            seg_start = i
+            while i < length:
+                ch = line[i]
+                if not _is_arabic(ch) and ch != ' ':
+                    break
+                i += 1
+            # Reverse the Arabic segment
+            segment = line[seg_start:i]
+            words = segment.split()
+            rev_words = []
+            for word in words:
+                wlen = len(word)
+                if wlen > 1:
+                    rev_words.append(word[::-1])
+                else:
+                    rev_words.append(word)
+            rev_words.reverse()
+            result += ' '.join(rev_words)
+        else:
+            result += line[i]
+            i += 1
+
+    return result
+
+
+def py_smart_process(text):
+    """Smart mode: auto-skip code blocks, URLs, paths, commands."""
+    return '\n'.join(py_smart_process_line(line) for line in text.split('\n'))
+
+
 # 1BRC Technique: Chunk-based splitting for multiprocessing
 def _split_lines(lines, num_chunks):
     n = len(lines)
@@ -176,11 +267,13 @@ if FAST_MODE:
     do_reverse_parallel = reverse_arabic_text_parallel
     do_has_arabic = has_arabic
     do_process_file = process_file_parallel
+    do_smart = smart_process
 else:
     do_reverse = py_reverse_arabic_text
     do_reverse_parallel = py_reverse_parallel
     do_has_arabic = py_has_arabic
     do_process_file = py_process_file_mmap
+    do_smart = py_smart_process
 
 
 # ══════════════════════════════════════════════════════════════
@@ -196,6 +289,8 @@ def main():
     parser.add_argument('--output', '-o', help='Output file (default: stdout)')
     parser.add_argument('--threads', '-t', type=int, default=1,
                         help='Number of processes (1-8, default: 1)')
+    parser.add_argument('--no-smart', action='store_true',
+                        help='Disable smart mode (skip code/URLs/paths automatically)')
     parser.add_argument('--benchmark', '-b', action='store_true',
                         help='Run benchmark')
     parser.add_argument('--quiet', '-q', action='store_true',
@@ -225,10 +320,14 @@ def main():
 
     start = time.perf_counter()
 
-    if num_threads > 1 and text.count('\n') > 100:
-        result = do_reverse_parallel(text, num_threads)
+    # Smart mode is default, --no-smart disables it
+    if args.no_smart:
+        if num_threads > 1 and text.count('\n') > 100:
+            result = do_reverse_parallel(text, num_threads)
+        else:
+            result = do_reverse(text)
     else:
-        result = do_reverse(text)
+        result = do_smart(text)
 
     elapsed = time.perf_counter() - start
 
