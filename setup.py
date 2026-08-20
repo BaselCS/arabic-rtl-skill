@@ -30,7 +30,7 @@ setup(
     name="arabic_rtl_fast",
     version="1.0.0",
     description="Blazing fast Arabic RTL text processor for LTR terminals",
-    author="basel",
+    author="BaselCS",
     ext_modules=cythonize(
         extensions,
         compiler_directives={

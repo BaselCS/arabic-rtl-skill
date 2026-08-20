@@ -45,13 +45,13 @@
 الأصل :
 السلام عليكم ورحمة الله
 # hi
-filepath:/home/basel/work
+filepath:/home/user/work
 print("Hello world")
 
 المرسل :
 هللا ةمحرو مكيلع مالسلا
 # hi
-filepath:/home/basel/work
+filepath:/home/user/work
 print("Hello world")
 ```
 
@@ -208,13 +208,13 @@ Skips all English text, numbers, and the following:
 Original: 
 السلام عليكم ورحمة الله
 # hi
-filepath:/home/basel/work
+filepath:/home/user/work
 print("Hello world")
 
 output:
 هللا ةمحرو مكيلع مالسلا
 # hi
-filepath:/home/basel/work
+filepath:/home/user/work
 print("Hello world")
 
 ```
