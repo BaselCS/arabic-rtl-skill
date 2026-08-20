@@ -168,6 +168,32 @@ cp SKILL.md ~/.opencode/skills/arabic-rtl/
 
 </div>
 
+### أوضاع التشغيل
+
+<div align="left" dir="ltr">
+
+| الوضع | الوصف | الاستخدام |
+|-------|-------|-----------|
+| **الوضع الافتراضي** | معالجة فورية، بدون إحصائيات | `echo "text" \| arabic-rtl` |
+| **وضع المستدام** | خلفية مستمرة، استجابة فورية | `arabic-rtl-daemon start` |
+| **وضع الملفات** | معالجة ملفات بكفاءة عالية | `arabic-rtl --file input.txt` |
+| **وضع المقارنة** | اختبار الأداء مع إحصائيات | `arabic-rtl --benchmark` |
+| **عرض الإحصائيات** | إظهار أداء المعالجة | `arabic-rtl --show-stats` |
+
+**تفعيل وضع المستدام:**
+```bash
+# بدء الخدمة
+arabic-rtl-daemon start
+
+# استخدامها (أسرع بكثير)
+echo "السلام عليكم" | arabic-rtl --daemon
+
+# إيقاف الخدمة
+arabic-rtl-daemon stop
+```
+
+</div>
+
 ### المتطلبات
 
 * Python 3.10 أو أحدث
@@ -312,6 +338,28 @@ This tool can be integrated as an [opencode](https://opencode.ai) skill. Copy `S
 ```bash
 mkdir -p ~/.opencode/skills/arabic-rtl
 cp SKILL.md ~/.opencode/skills/arabic-rtl/
+```
+
+### Operating Modes
+
+| Mode | Description | Usage |
+|------|-------------|-------|
+| **Default** | Instant processing, no stats | `echo "text" \| arabic-rtl` |
+| **Daemon** | Continuous background, instant response | `arabic-rtl-daemon start` |
+| **File** | Efficient file processing | `arabic-rtl --file input.txt` |
+| **Benchmark** | Performance testing with stats | `arabic-rtl --benchmark` |
+| **Show Stats** | Display processing performance | `arabic-rtl --show-stats` |
+
+**Enabling Daemon Mode:**
+```bash
+# Start background service
+arabic-rtl-daemon start
+
+# Use it (much faster)
+echo "السلام عليكم" | arabic-rtl --daemon
+
+# Stop the service
+arabic-rtl-daemon stop
 ```
 
 ### Requirements

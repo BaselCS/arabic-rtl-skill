@@ -109,14 +109,32 @@ WRAPPER_PY_EOF
 chmod +x "${WRAPPER_PY}"
 echo "✅ Installed Python wrapper: ${WRAPPER_PY}"
 
+# Create daemon wrapper
+DAEMON_WRAPPER="${INSTALL_DIR}/arabic-rtl-daemon"
+cat > "${DAEMON_WRAPPER}" << DAEMON_EOF
+#!/bin/bash
+# Arabic RTL Processor - Daemon Wrapper
+# Installed from: ${SCRIPT_DIR}
+
+exec ${PYTHON} "${SCRIPT_DIR}/arabic_rtl_daemon.py" "\$@"
+DAEMON_EOF
+
+chmod +x "${DAEMON_WRAPPER}"
+echo "✅ Installed daemon wrapper: ${DAEMON_WRAPPER}"
+
 echo ""
 echo "=================================="
 echo "✅ Installation complete!"
 echo ""
-echo "Usage:"
+echo "Usage (default mode):"
 echo "  echo 'السلام عليكم' | arabic-rtl"
 echo "  arabic-rtl <<< 'بسم الله الرحمن الرحيم'"
 echo "  cat file.txt | arabic-rtl"
+echo ""
+echo "Daemon mode (optional, faster for repeated calls):"
+echo "  arabic-rtl-daemon start"
+echo "  echo 'text' | arabic-rtl --daemon"
+echo "  arabic-rtl-daemon stop"
 echo ""
 echo "If 'arabic-rtl' command not found, restart your shell:"
 echo "  source ~/.bashrc"

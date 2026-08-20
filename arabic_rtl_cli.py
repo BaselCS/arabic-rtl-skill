@@ -357,10 +357,12 @@ def main():
                         help=f'Number of processes (1-32, default: {default_threads})')
     parser.add_argument('--benchmark', '-b', action='store_true',
                         help='Run benchmark')
-    parser.add_argument('--quiet', '-q', action='store_true',
-                        help='Suppress stats')
+    parser.add_argument('--show-stats', '-s', action='store_true',
+                        help='Show performance stats')
     parser.add_argument('--no-smart', action='store_true',
                         help='Disable smart mode (processes everything as text)')
+    parser.add_argument('--daemon', '-d', action='store_true',
+                        help='Use daemon mode (auto-starts if not running)')
     parser.add_argument('--version', '-v', action='version', version='arabic-rtl-processor 1.0.0')
     args = parser.parse_args()
 
@@ -373,6 +375,20 @@ def main():
         return
 
     smart_mode = not args.no_smart
+
+    # Daemon mode: send to daemon and exit
+    if args.daemon:
+        from arabic_rtl_daemon import send_to_daemon
+        if args.text:
+            text = args.text
+        elif not sys.stdin.isatty():
+            text = sys.stdin.read()
+        else:
+            parser.print_help()
+            return
+        result = send_to_daemon(text)
+        print(result, end='')
+        return
 
     # File processing (1BRC-style mmap + parallel)
     if args.file:
@@ -403,7 +419,7 @@ def main():
     else:
         print(result)
 
-    if not args.quiet:
+    if args.show_stats:
         lines_count = text.count('\n') + 1
         throughput = lines_count / elapsed if elapsed > 0 else 0
         print(f"\n--- {mode} | {num_threads} proc(s) | "
