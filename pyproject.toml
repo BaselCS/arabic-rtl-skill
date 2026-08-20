@@ -29,9 +29,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/YOUR_USERNAME/arabic-rtl-processor"
-Repository = "https://github.com/YOUR_USERNAME/arabic-rtl-processor"
-Issues = "https://github.com/YOUR_USERNAME/arabic-rtl-processor/issues"
+Homepage = "https://github.com/baselCS/arabic-rtl-processor"
+Repository = "https://github.com/baselCS/arabic-rtl-processor"
+Issues = "https://github.com/baselCS/arabic-rtl-processor/issues"
 
 [project.scripts]
 arabic-rtl = "arabic_rtl_cli:main"
