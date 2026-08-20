@@ -1,53 +1,250 @@
-# Arabic RTL Processor
+<div align="center">
 
-Blazing fast Arabic text processor for left-to-right terminal display. Built with Cython, optimized using techniques from the [1 Billion Row Challenge](https://1brc.dev/).
+# Arabic RTL Processor — معالج النصوص العربية للطرفيات
 
-## What It Does
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Cython](https://img.shields.io/badge/Cython-3.0%2B-003B5C?style=for-the-badge&logo=cython&logoColor=white)](https://cython.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
-Windows Terminal and many CLI surfaces render Arabic RTL/BiDi text incorrectly. This tool transforms Arabic text so it reads correctly in LTR terminals:
+**معالج نصوص عربية عالي الأداء معتمد على Cython للعرض الصحيح في الطرفيات الموجهة من اليسار إلى اليمين (LTR).**
 
-1. **Reverses character order** inside each Arabic word
-2. **Reverses word order** of the entire line
+**A blazing-fast, Cython-powered Arabic text processor for correct display in Left-to-Right (LTR) terminals.**
 
+<br/>
+
+<a href="sample.png"><img src="sample.png" width="600" alt="Terminal Processing Preview"/></a>
+
+<br/>
+
+[**العربية**](#arabic--العربية) | [**English**](#english)
+
+</div>
+
+---
+
+## Arabic / العربية
+
+أداة ومعالِج نصوص عربية عالي السرعة مصمم للطرفيات وبيئات سطر الأوامر (CLI) مثل Windows Terminal و [Ghostty](https://ghostty.org/) والتي لا تدعم عرض النصوص من اليمين إلى اليسار (RTL) بشكل صحيح. يعتمد المشروع على **[Cython](https://cython.org)** ويستفيد من تقنيات تحسين الأداء المستوحاة من تحدي **"[1 Billion Row Challenge](https://1brc.dev/)"** للوصول إلى سرعة معالجة تتجاوز مليون سطر في الثانية.
+
+### آلية العمل
+
+يقوم البرنامج بتحويل النص العربي ليعرض بشكل صحيح في الطرفيات ذات الاتجاه من اليسار إلى اليمين عبر خطوتين:
+1. **عكس ترتيب الحروف** داخل كل كلمة عربية.
+2. **عكس ترتيب الكلمات** في السطر بالكامل.
+
+<div align="left" dir="ltr">
+
+```text
+النص الأصلي: السلام عليكم ورحمة الله
+النص المعالج: هللا ةمحرو مكيلع مالسلا
 ```
-Input:  السلام عليكم ورحمة الله
-Output: هللا ةمحرو مكيلع مالسلا
-```
 
-## Performance
+</div>
 
-| Implementation | Speed | Notes |
-|---------------|-------|-------|
-| Pure Python | 215K lines/sec | Fallback, no dependencies |
-| **Cython compiled** | **1M+ lines/sec** | Bitmap lookup, `-O3 -march=native` |
+### المميزات الأساسية
 
-**Benchmark** (100K lines, 3.1M chars):
-- Old (5 range checks): 464ms
-- New (bitmap lookup): **131ms** — **3.5x faster**
+* **سرعة فائقة:** معالجة أكثر من مليون سطر في الثانية بفضل C-Extensions و Cython.
+* **Zero LLM Tokens:** معالجة سريعة محلياً دون الحاجة لاستهلاك Tokens عبر واجهات الذكاء الاصطناعي.
+* **واجهة سطر أوامر (CLI) مرنة:** تدعم إدخال النصوص مباشرة، التمرير عبر الأنابيب (Piping)، ومعالجة الملفات الكبيرة باستخدام خيوط متعددة.
+* **واجهة برمجة تطبيقات (Python API):** سهلة الاستخدام والدمج المباشر داخل مشاريع Python.
+* **تكامل مع عملاء الذكاء الاصطناعي:** توفير أداة ومكون (Skill) جاهز للاستخدام الفوري مع عملاء الذكاء الاصطناعي مثل opencode.
+* **تغطية شاملة لترميز اليونيكود العربي:** تشمل دعم كتل Arabic، و Arabic Supplement، و Extended-A، و Presentation Forms A & B.
 
-## Install
+---
+
+### بنية التطوير
+
+بنيت هذه الأداة لتعمل بكفاءة فائقة وسرعة استثنائية، مع التركيز على التقنيات التالية:
+* **استخدام Cython لتجميع امتداد أصيل (Native Extension):** مجمّع باستخدام الخيارات `-O3 -march=native` لأقصى سرعة ممكنة.
+* **جدول البحث النقطي (Bitmap Lookup Table):** فحص محارف اليونيكود العربية بزمن ثابت $O(1)$ وبحجم ذاكرة لا يتجاوز 8KB.
+* **قراءة الملفات عبر `mmap`:** للوصول المباشر إلى الذاكرة دون الحاجة لنسخ محتوى الملفات الكبيرة (Zero-copy memory access).
+* **المعالجة متعددة الخيوط (Multiprocessing):** لدعم خيوط معالجة متعددة، وتجاوز قفل GIL، وتفعيل التوازي الفعلي.
+* **إلغاء فحص الحدود (`boundscheck=False`):** لتقليل تكلفة الفحص البرمجي وضمان أقصى سرعة تنفيذية.
+
+### التقنيات المستخدمة
+
+* **اللغة الأساسية:** [Python 3.10+](https://python.org)
+* **المسارع والمجمّع:** [Cython 3.0+](https://cython.org) (مع C Compiler / GCC)
+* **تقنيات الذاكرة والتوازي:** `mmap`, `multiprocessing.Pool`
+* **إدارة الحزم والمشاريع:** `uv`, `setuptools`
+
+---
+
+### التثبيت والإعداد
+
+<div align="left" dir="ltr">
 
 ```bash
-# Clone
-git clone https://github.com/YOUR_USERNAME/arabic-rtl-processor.git
+# استنساخ المستودع
+git clone https://github.com/BaselCS/arabic-rtl-processor.git
 cd arabic-rtl-processor
 
-# Install Cython (if not installed)
-pip install cython
+# إنشاء وتفعيل بيئة افتراضية بواسطة uv
+uv venv
+source .venv/bin/activate
 
-# Build native extension
-python3 setup.py build_ext --inplace
+# تثبيت الاعتمادات وبناء الامتداد الأصيل (Native Extension)
+uv pip install cython setuptools
+uv run python setup.py build_ext --inplace
 ```
 
-## Usage
+</div>
 
-### CLI
+### طريقة الاستخدام
+
+#### 1. عبر سطر الأوامر (CLI)
+
+<div align="left" dir="ltr">
 
 ```bash
-# Process text directly
+# معالجة نص مباشر
 python3 arabic_rtl_cli.py "السلام عليكم ورحمة الله"
 
-# Pipe input
+# التمرير عبر الأنابيب (Piping)
+echo "بسم الله الرحمن الرحيم" | python3 arabic_rtl_cli.py
+
+# معالجة ملف (تستخدم mmap للملفات الكبيرة)
+python3 arabic_rtl_cli.py --file input.txt
+
+# معالجة ملف بخيوط متعددة (Multithreaded)
+python3 arabic_rtl_cli.py --file large.txt --threads 4
+
+# حفظ المخرجات في ملف
+python3 arabic_rtl_cli.py --file input.txt --output output.txt
+
+# الوضع الهادئ (بدون عرض الإحصائيات)
+echo "Hello مرحبا" | python3 arabic_rtl_cli.py --quiet
+
+# تشغيل اختبار الأداء (Benchmark)
+python3 arabic_rtl_cli.py --benchmark
+```
+
+</div>
+
+#### 2. عبر مكتبة Python (API)
+
+<div align="left" dir="ltr">
+
+```python
+from arabic_rtl import reverse_arabic_text, has_arabic
+
+# معالجة النص
+result = reverse_arabic_text("الحمد لله رب العالمين")
+print(result)  # نيملاعلا بر هلل دمحلا
+
+# التحقق من وجود حروف عربية
+if has_arabic("Hello مرحبا"):
+    print("تم اكتشاف نص عربي!")
+```
+
+</div>
+
+### التكامل مع opencode
+
+يمكن استخدام هذه الأداة كمهارة ([opencode Skill](https://opencode.ai)). قم بنسخ ملف `SKILL.md` إلى مجلد مهارات opencode لديك:
+
+<div align="left" dir="ltr">
+
+```bash
+mkdir -p ~/.opencode/skills/arabic-rtl
+cp SKILL.md ~/.opencode/skills/arabic-rtl/
+```
+
+</div>
+
+### المتطلبات
+
+* Python 3.10 أو أحدث
+* Cython 3.0 أو أحدث
+* GCC / Clang (لتجميع الامتداد البرمجي)
+
+### شكر وتقدير (Acknowledgments)
+
+شكر خاص للمشاريع الملهمة التي اعتمدنا على تقنياتها وأفكارها في تحسين الأداء:
+* **[1BRC Challenge (ifnesi/1brc)](https://github.com/ifnesi/1brc):** تحدي الـ 1 Billion Row Challenge الملهم لتقنيات تحسين الأداء وتجاوز حدود السرعة.
+* **[py-1brc (Ben Hoyt)](https://github.com/benhoyt/py-1brc):** مشروع Ben Hoyt المميز واستراتيجياته في تحسين أداء Python إلى أقصى سرعة ممكنة.
+
+### المساهمة
+
+المساهمات البرمجية والاقتراحات مرحب بها دائماً. يمكنك فتح Issue أو إرسال Pull Request للمساهمة في تطوير وتحسين المشروع.
+
+### الترخيص
+
+هذا المشروع مرخص تحت رخصة [MIT](LICENSE).
+
+---
+
+## English
+
+### Arabic RTL Processor
+
+A high-performance Arabic text processing tool designed for command-line interfaces (CLI) and terminals like Windows Terminal and [Ghostty](https://ghostty.org/) that lack native Right-to-Left (RTL) text rendering support. Powered by **[Cython](https://cython.org)** and leveraging optimization techniques inspired by the **"[1 Billion Row Challenge](https://1brc.dev/)"**, it achieves processing speeds exceeding 1,000,000 lines per second.
+
+### How It Works
+
+Transforms Arabic text for correct visual ordering in Left-to-Right environments through a 2-step process:
+1. **Reverses character order** within each Arabic word.
+2. **Reverses word order** across the entire line.
+
+```text
+Original:  السلام عليكم ورحمة الله
+Processed: هللا ةمحرو مكيلع مالسلا
+```
+
+### Key Features
+
+* **Blazing Speed:** Processes over 1 million lines per second powered by C-Extensions and Cython.
+* **Zero LLM Tokens:** Fast local processing without burning API tokens when using AI coding assistants.
+* **Flexible CLI Interface:** Supports direct string input, pipeline input piping, file processing, and multi-core multithreading.
+* **Clean Python API:** Simple and intuitive library functions for direct integration into Python applications.
+* **AI Assistant Integration:** Pre-configured skill (`SKILL.md`) for instant integration with AI agents like opencode.
+* **Comprehensive Unicode Coverage:** Supports Standard Arabic, Arabic Supplement, Extended-A, and Presentation Forms A & B blocks.
+
+---
+
+### Architecture & Performance
+
+Engineered for extreme performance and ultra-low latency using the following techniques:
+* **Compiled Cython Native Extension:** Built with `-O3 -march=native` compiler flags for maximum execution speed.
+* **Bitmap Lookup Table:** $O(1)$ Arabic character detection requiring only an 8KB memory footprint.
+* **Memory-Mapped I/O (`mmap`):** Direct zero-copy memory access for efficient handling of large files.
+* **True Parallelism (`multiprocessing`):** Multi-threaded execution bypasses Python's GIL for full multi-core utilization.
+* **Disabled Bounds Checking (`boundscheck=False`):** Eliminates index checking overhead to maximize execution speed.
+
+### Tech Stack
+
+* **Core Language:** [Python 3.10+](https://python.org)
+* **Compiler & Accelerator:** [Cython 3.0+](https://cython.org) (with GCC / C Compiler)
+* **Concurrency & Memory:** `mmap`, `multiprocessing.Pool`
+* **Package Management:** `uv`, `setuptools`
+
+---
+
+### Installation & Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/BaselCS/arabic-rtl-processor.git
+cd arabic-rtl-processor
+
+# Create and activate virtual environment via uv
+uv venv
+source .venv/bin/activate
+
+# Install dependencies and build native extension
+uv pip install cython setuptools
+uv run python setup.py build_ext --inplace
+```
+
+### Usage
+
+#### 1. Command-Line Interface (CLI)
+
+```bash
+# Process direct text input
+python3 arabic_rtl_cli.py "السلام عليكم ورحمة الله"
+
+# Pipe input via stdin
 echo "بسم الله الرحمن الرحيم" | python3 arabic_rtl_cli.py
 
 # Process a file (uses mmap for large files)
@@ -56,17 +253,17 @@ python3 arabic_rtl_cli.py --file input.txt
 # Multithreaded file processing
 python3 arabic_rtl_cli.py --file large.txt --threads 4
 
-# Save output
+# Save output to file
 python3 arabic_rtl_cli.py --file input.txt --output output.txt
 
-# Quiet mode (no stats)
+# Quiet mode (suppress performance statistics)
 echo "Hello مرحبا" | python3 arabic_rtl_cli.py --quiet
 
-# Run benchmark
+# Run performance benchmark suite
 python3 arabic_rtl_cli.py --benchmark
 ```
 
-### Python API
+#### 2. Python API
 
 ```python
 from arabic_rtl import reverse_arabic_text, has_arabic
@@ -75,63 +272,36 @@ from arabic_rtl import reverse_arabic_text, has_arabic
 result = reverse_arabic_text("الحمد لله رب العالمين")
 print(result)  # نيملاعلا بر هلل دمحلا
 
-# Check if text contains Arabic
+# Check if text contains Arabic characters
 if has_arabic("Hello مرحبا"):
-    print("Arabic detected!")
+    print("Arabic text detected!")
 ```
 
-## How It Works
+### opencode Integration
 
-### 1BRC Optimizations
-
-| Technique | Benefit |
-|-----------|---------|
-| **Bitmap lookup table** | O(1) Arabic char detection (8KB bitmap) |
-| **mmap file reading** | Zero-copy access for large files |
-| **multiprocessing.Pool** | True parallelism, bypasses GIL |
-| **Cython `-O3`** | Compiled to native code |
-| **`boundscheck=False`** | No array bounds checking |
-| **`-march=native`** | Optimized for your CPU |
-
-### Arabic Unicode Ranges
-
-The bitmap covers all Arabic Unicode blocks:
-- `U+0600–U+06FF` — Arabic
-- `U+0750–U+077F` — Arabic Supplement
-- `U+08A0–U+08FF` — Arabic Extended-A
-- `U+FB50–U+FDFF` — Arabic Presentation Forms-A
-- `U+FE70–U+FEFF` — Arabic Presentation Forms-B
-
-## opencode Integration
-
-This tool can be used as an [opencode](https://opencode.ai) skill. Copy `SKILL.md` to your opencode skills directory:
+This tool can be integrated as an [opencode](https://opencode.ai) skill. Copy `SKILL.md` to your opencode skills directory:
 
 ```bash
 mkdir -p ~/.opencode/skills/arabic-rtl
 cp SKILL.md ~/.opencode/skills/arabic-rtl/
 ```
 
-Then the AI will automatically process Arabic text through this tool before sending.
+### Requirements
 
-## Examples
+* Python 3.10+
+* Cython 3.0+
+* GCC / Clang (for compiling native C extensions)
 
-```
-Input:  بسم الله الرحمن الرحيم
-Output: ميحرلا نمحرلا هللا مسب
+### Acknowledgments
 
-Input:  الحمد لله رب العالمين
-Output: نيملاعلا بر هلل دمحلا
+Special thanks to the inspiring projects and creators whose performance techniques contributed to this project:
+* **[1BRC Challenge (ifnesi/1brc)](https://github.com/ifnesi/1brc):** The 1 Billion Row Challenge that inspired high-performance optimization techniques.
+* **[py-1brc (Ben Hoyt)](https://github.com/benhoyt/py-1brc):** Ben Hoyt's excellent repository on pushing Python performance to its extreme limits.
 
-Input:  Hello world مرحبا بالعالم 123
-Output: 123 ملاعلاب ابحرم world Hello
-```
+### Contributing
 
-## Requirements
+Contributions, issues, and feature requests are welcome! Feel free to open an Issue or submit a Pull Request.
 
-- Python 3.10+
-- Cython 3.0+
-- GCC (for compilation)
+### License
 
-## License
-
-MIT
+This project is licensed under the [MIT License](LICENSE).
