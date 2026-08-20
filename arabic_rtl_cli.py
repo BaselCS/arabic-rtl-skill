@@ -398,11 +398,11 @@ def main():
     # Text input
     if args.text:
         text = args.text
-    elif not sys.stdin.isatty():
-        text = sys.stdin.read()
     else:
-        parser.print_help()
-        return
+        text = sys.stdin.read()
+        if not text:
+            parser.print_help()
+            return
 
     start = time.perf_counter()
 
