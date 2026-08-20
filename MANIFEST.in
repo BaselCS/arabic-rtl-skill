@@ -1,0 +1,7 @@
+include LICENSE
+include README.md
+include requirements.txt
+include SKILL.md
+include arabic_rtl.pyx
+include arabic_rtl_cli.py
+include setup.py

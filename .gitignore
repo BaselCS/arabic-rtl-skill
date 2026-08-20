@@ -1,0 +1,31 @@
+# Compiled files
+*.c
+*.so
+*.o
+*.pyd
+
+# Build directories
+build/
+dist/
+*.egg-info/
+__pycache__/
+
+# Cython generated
+arabic_rtl.c
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+*.pyc
+*.pyo
+.pytest_cache/
+venv/
+.venv/
