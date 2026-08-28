@@ -8,7 +8,7 @@ description: MANDATORY whenever responding, writing, or displaying Arabic text i
 **RULE: Whenever generating ANY Arabic text in your response, pipe your standard Arabic text through `arabic-rtl` and output the command result.**
 
 ### How to use:
-1. Write **NORMAL, STANDARD, FORWARD Arabic** in the EOF block (DO NOT manually reverse characters or words):
+1. Write **NORMAL, STANDARD, FORWARD Arabic** in the EOF block (plain Arabic or with Tashkeel/Quranic diacritics):
 ```bash
 arabic-rtl << 'EOF'
 مرحبا بك! كيف يمكنني مساعدتك اليوم؟
@@ -16,10 +16,11 @@ EOF
 ```
 2. **Copy the command's exact output** directly into your final response to the user.
 
-### Important:
-- **Input:** Standard natural Arabic (e.g. `السلام عليكم ورحمة الله`).
+### Key Capabilities:
+- **Cursive Shaping:** Auto-converts to Presentation Forms-B and Lam-Alef ligatures (`لا`, `لأ`, `لإ`, `لآ`).
+- **Tashkeel & Diacritics:** Keeps multi-stacked diacritics attached to base letters without breaking cursive connections.
+- **Smart Skipping:** Preserves markdown code blocks (` ``` ` / ` ` `), URLs, file paths, and LTR numbers.
 - **Never** manually flip, reverse, or space out letters yourself.
-- Auto-handles cursive shaping (Presentation Forms-B + ligatures), numbers, code blocks, URLs, and paths.
 
 **Setup (if binary missing):**
 ```bash
