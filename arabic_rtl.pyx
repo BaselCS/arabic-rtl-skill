@@ -208,7 +208,7 @@ cdef void init_shaping_table() noexcept nogil:
     SHAPING_TABLE[0x4A] = ShapeEntry(0xFEF1, 0xFEF2, 0xFEF4, 0xFEF3, True, True)  # ي
 
     # Extended Arabic (Quranic, Persian, Urdu)
-    SHAPING_TABLE[0x71] = ShapeEntry(0xFB50, 0xFB51, 0, 0, False, True)        # ٱ ALEF WASLA
+    SHAPING_TABLE[0x71] = ShapeEntry(0xFE8D, 0xFE8E, 0, 0, False, True)        # ٱ ALEF WASLA -> Maps to Presentation Forms-B Alef for tight rendering
     SHAPING_TABLE[0x79] = ShapeEntry(0xFB66, 0xFB67, 0xFB69, 0xFB68, True, True)  # ٹ TTEH
     SHAPING_TABLE[0x7E] = ShapeEntry(0xFB56, 0xFB57, 0xFB59, 0xFB58, True, True)  # پ PEH
     SHAPING_TABLE[0x86] = ShapeEntry(0xFB7A, 0xFB7B, 0xFB7D, 0xFB7C, True, True)  # چ TCHEH
@@ -1002,9 +1002,9 @@ def process_file_parallel(str filepath, int num_threads=4, str output=None, bint
     text = raw.decode('utf-8', errors='replace')
 
     if num_threads > 1:
-        result = process_text_parallel(text, num_threads, smart_mode, shape)
+        result = process_text_parallel(text, num_threads, smart_mode, shape, strip_tashkeel, allah_ligature)
     else:
-        result = process_text(text, smart_mode, shape)
+        result = process_text(text, smart_mode, shape, strip_tashkeel, allah_ligature)
 
     elapsed = time.perf_counter() - start
 

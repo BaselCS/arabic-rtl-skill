@@ -174,7 +174,7 @@ SHAPING_TABLE = {
     '\u064A': ('\uFEF1', '\uFEF2', '\uFEF4', '\uFEF3', True),  # ي
 
     # Extended Arabic (Quranic, Persian, Urdu)
-    '\u0671': ('\uFB50', '\uFB51', '', '', False),        # ٱ ALEF WASLA
+    '\u0671': ('\uFE8D', '\uFE8E', '', '', False),        # ٱ ALEF WASLA -> Maps to Presentation Forms-B Alef for tight rendering
     '\u0679': ('\uFB66', '\uFB67', '\uFB69', '\uFB68', True),  # ٹ TTEH
     '\u067E': ('\uFB56', '\uFB57', '\uFB59', '\uFB58', True),  # پ PEH
     '\u0686': ('\uFB7A', '\uFB7B', '\uFB7D', '\uFB7C', True),  # چ TCHEH
@@ -690,7 +690,9 @@ def _process_chunk(args):
     """Worker function for multiprocessing."""
     chunk, smart_mode = args[0], args[1]
     shape = args[2] if len(args) > 2 else True
-    return py_process_text('\n'.join(chunk), smart_mode=smart_mode, shape=shape).split('\n')
+    strip_tashkeel = args[3] if len(args) > 3 else False
+    allah_ligature = args[4] if len(args) > 4 else False
+    return py_process_text('\n'.join(chunk), smart_mode=smart_mode, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature).split('\n')
 
 
 def py_decide_process_count(text_or_lines, max_processes=None):
@@ -746,7 +748,7 @@ def py_decide_process_count(text_or_lines, max_processes=None):
 py_get_optimal_process_count = py_decide_process_count
 
 
-def py_process_text_parallel(text, num_threads=0, smart_mode=True, shape=True):
+def py_process_text_parallel(text, num_threads=0, smart_mode=True, shape=True, strip_tashkeel=False, allah_ligature=False):
     """Process text using multiprocessing.Pool (bypasses GIL)."""
     if num_threads is None or num_threads <= 0:
         num_threads = py_decide_process_count(text)
@@ -760,10 +762,10 @@ def py_process_text_parallel(text, num_threads=0, smart_mode=True, shape=True):
     n = len(lines)
 
     if n < 100 or num_threads <= 1:
-        return py_process_text(text, smart_mode, shape)
+        return py_process_text(text, smart_mode, shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature)
 
     chunks = _split_lines(lines, num_threads, smart_mode)
-    chunk_args = [(chunk, smart_mode, shape) for chunk in chunks]
+    chunk_args = [(chunk, smart_mode, shape, strip_tashkeel, allah_ligature) for chunk in chunks]
 
     with multiprocessing.Pool(num_threads) as pool:
         results = pool.map(_process_chunk, chunk_args)
@@ -775,7 +777,7 @@ def py_process_text_parallel(text, num_threads=0, smart_mode=True, shape=True):
 
 
 # 1BRC Technique: mmap-based file reading
-def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True, shape=True):
+def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True, shape=True, strip_tashkeel=False, allah_ligature=False):
     """Process file using mmap (zero-copy file access)."""
     if not os.path.exists(filepath):
         print(f"Error: File '{filepath}' not found.", file=sys.stderr)
@@ -801,9 +803,9 @@ def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True, 
         num_threads = py_decide_process_count(text)
 
     if num_threads > 1:
-        result = py_process_text_parallel(text, num_threads, smart_mode, shape)
+        result = py_process_text_parallel(text, num_threads, smart_mode, shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature)
     else:
-        result = py_process_text(text, smart_mode, shape)
+        result = py_process_text(text, smart_mode, shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature)
 
     if output:
         try:
