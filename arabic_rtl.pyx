@@ -145,7 +145,7 @@ cdef void init_tables() noexcept nogil:
     SHAPING_TABLE[0x46] = ShapeEntry(0xFEE5, 0xFEE6, 0xFEE8, 0xFEE7, True, True)  # ن
     SHAPING_TABLE[0x47] = ShapeEntry(0xFEE9, 0xFEEA, 0xFEEC, 0xFEEB, True, True)  # ه
     SHAPING_TABLE[0x48] = ShapeEntry(0xFEED, 0xFEEE, 0, 0, False, True)        # و
-    SHAPING_TABLE[0x49] = ShapeEntry(0xFEEF, 0xFEF0, 0xFEF4, 0xFEF3, True, True)  # ى
+    SHAPING_TABLE[0x49] = ShapeEntry(0xFEEF, 0xFEF0, 0, 0, False, True)        # ى (Alef Maksura)
     SHAPING_TABLE[0x4A] = ShapeEntry(0xFEF1, 0xFEF2, 0xFEF4, 0xFEF3, True, True)  # ي
 
     # Extended Arabic (Quranic, Persian, Urdu)
