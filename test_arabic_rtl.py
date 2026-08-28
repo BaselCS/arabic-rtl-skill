@@ -163,7 +163,7 @@ def test_cli_file_options():
         subprocess.run(cmd, check=True)
         with open(out_path, 'r', encoding='utf-8') as f_out:
             out_text = f_out.read()
-        assert out_text == "ﻢﻴﺣﺮﻟﺍ ﻦﻤﺣﺮﻟﺍ ﻪﻠﻟﺍ ﻢﺴﺑ\n"
+        assert out_text == "ﻢﻴﺣﺮﻟﺍ ﻦﻤﺣﺮﻟﺍ ﷲ ﻢﺴﺑ\n"
     finally:
         if os.path.exists(in_path):
             os.remove(in_path)

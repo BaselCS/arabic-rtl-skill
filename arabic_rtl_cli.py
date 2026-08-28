@@ -297,7 +297,7 @@ def _py_reverse_arabic_word(word, shape=True, strip_tashkeel=False, allah_ligatu
     # Allah ligature replacement
     if allah_ligature and shape:
         clean_word = "".join(c for c in word if not _is_diacritic(ord(c)))
-        if clean_word == "الله":
+        if clean_word in ("الله", "ٱلله"):
             return "\uFDF2"
 
     if not shape:
@@ -871,10 +871,14 @@ def main():
                         help='Show performance stats')
     parser.add_argument('--no-smart', action='store_true',
                         help='Disable smart mode (processes everything as text)')
+    parser.add_argument('--keep-tashkeel', '-kt', action='store_true',
+                        help='Keep Tashkeel / diacritics (default: stripped for tight zero-gap monospace rendering)')
     parser.add_argument('--no-tashkeel', '-nt', action='store_true',
-                        help='Strip Tashkeel diacritics for clean uniform monospace terminal rendering')
+                        help='Strip Tashkeel / diacritics (default behavior)')
+    parser.add_argument('--no-allah-ligature', action='store_true',
+                        help='Disable dedicated Allah ligature (\uFDF2)')
     parser.add_argument('--allah-ligature', '-al', action='store_true',
-                        help='Replace Allah with dedicated single-cell ligature (\uFDF2)')
+                        help='Render Allah as single ligature (default behavior)')
     parser.add_argument('--stream', '-S', action='store_true',
                         help='Process stdin line-by-line in real-time (for logs/tail -f)')
     parser.add_argument('--daemon', '-d', action='store_true',
@@ -889,8 +893,8 @@ def main():
         return
 
     smart_mode = not args.no_smart
-    strip_tashkeel = args.no_tashkeel
-    allah_ligature = args.allah_ligature
+    strip_tashkeel = not args.keep_tashkeel
+    allah_ligature = not args.no_allah_ligature
 
     # Stream mode: process line-by-line in real time
     if args.stream:

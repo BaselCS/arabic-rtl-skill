@@ -274,10 +274,10 @@ cdef int shape_and_reverse_word_c(
             raw_units[raw_count].lam_alef_fin = 0
             raw_count += 1
 
-    # Check for Allah ligature (ا + ل + ل + ه)
+    # Check for Allah ligature (ا / ٱ + ل + ل + ه)
     if allah_ligature and raw_count == 4 and shape:
-        if raw_units[0].base_cp == 0x0627 and raw_units[1].base_cp == 0x0644 and raw_units[2].base_cp == 0x0644 and raw_units[3].base_cp == 0x0647:
-            out_cps[0] = 0xFDF2
+        if (raw_units[0].base_cp == 0x0627 or raw_units[0].base_cp == 0x0671) and raw_units[1].base_cp == 0x0644 and raw_units[2].base_cp == 0x0644 and raw_units[3].base_cp == 0x0647:
+            out_cps[0] = 0xFDF2  # ARABIC LIGATURE ALLAH ISOLATED FORM
             return 1
 
     if not shape:
