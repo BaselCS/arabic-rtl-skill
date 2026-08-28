@@ -1,0 +1,7 @@
+interface:
+  display_name: "Arabic RTL Mobile"
+  short_description: "يبني ويصحح واجهات الموبايل العربية RTL عبر iOS وAndroid وReact Native"
+  default_prompt: "Use $arabic-rtl-mobile to review an Arabic mobile screen in iOS native, Android native, or React Native and fix RTL layout, text alignment, row composition, icons, and navigation direction."
+
+policy:
+  allow_implicit_invocation: true
