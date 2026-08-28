@@ -262,11 +262,14 @@ cdef int shape_and_reverse_word_c(
     const unsigned int *word_cps,
     int word_len,
     unsigned int *out_cps,
-    bint shape
+    bint shape,
+    bint strip_tashkeel=False,
+    bint allah_ligature=False
 ) noexcept nogil:
     """
     100% pure C stack-allocated shaping and reversal.
     Zero Python heap allocation, 100% cache-local.
+    Supports optional Tashkeel stripping and Allah ligature substitution.
     """
     if word_len <= 0:
         return 0
@@ -294,17 +297,18 @@ cdef int shape_and_reverse_word_c(
     for i in range(word_len):
         cp = word_cps[i]
         if _is_diacritic_cp(cp):
-            if raw_count > 0 and raw_units[raw_count - 1].diac_count < 8:
-                raw_units[raw_count - 1].diacs[raw_units[raw_count - 1].diac_count] = cp
-                raw_units[raw_count - 1].diac_count += 1
-            elif raw_count < 512:
-                raw_units[raw_count].base_cp = cp
-                raw_units[raw_count].shaped_cp = cp
-                raw_units[raw_count].diacs[0] = cp
-                raw_units[raw_count].diac_count = 1
-                raw_units[raw_count].lam_alef_iso = 0
-                raw_units[raw_count].lam_alef_fin = 0
-                raw_count += 1
+            if not strip_tashkeel:
+                if raw_count > 0 and raw_units[raw_count - 1].diac_count < 8:
+                    raw_units[raw_count - 1].diacs[raw_units[raw_count - 1].diac_count] = cp
+                    raw_units[raw_count - 1].diac_count += 1
+                elif raw_count < 512:
+                    raw_units[raw_count].base_cp = cp
+                    raw_units[raw_count].shaped_cp = cp
+                    raw_units[raw_count].diacs[0] = cp
+                    raw_units[raw_count].diac_count = 1
+                    raw_units[raw_count].lam_alef_iso = 0
+                    raw_units[raw_count].lam_alef_fin = 0
+                    raw_count += 1
         elif raw_count < 512:
             raw_units[raw_count].base_cp = cp
             raw_units[raw_count].shaped_cp = cp
@@ -312,6 +316,12 @@ cdef int shape_and_reverse_word_c(
             raw_units[raw_count].lam_alef_iso = 0
             raw_units[raw_count].lam_alef_fin = 0
             raw_count += 1
+
+    # Check for Allah ligature (ا + ل + ل + ه)
+    if allah_ligature and raw_count == 4 and shape:
+        if raw_units[0].base_cp == 0x0627 and raw_units[1].base_cp == 0x0644 and raw_units[2].base_cp == 0x0644 and raw_units[3].base_cp == 0x0647:
+            out_cps[0] = 0xFDF2  # ARABIC LIGATURE ALLAH ISOLATED FORM
+            return 1
 
     if not shape:
         i = 0
@@ -332,16 +342,18 @@ cdef int shape_and_reverse_word_c(
                 for i in range(seg_start, seg_start + tok_lens[k]):
                     out_cps[out_pos] = raw_units[i].base_cp
                     out_pos += 1
-                    for j in range(raw_units[i].diac_count):
-                        out_cps[out_pos] = raw_units[i].diacs[j]
-                        out_pos += 1
+                    if not strip_tashkeel:
+                        for j in range(raw_units[i].diac_count):
+                            out_cps[out_pos] = raw_units[i].diacs[j]
+                            out_pos += 1
             else:
                 for i in range(seg_start + tok_lens[k] - 1, seg_start - 1, -1):
                     out_cps[out_pos] = raw_units[i].base_cp
                     out_pos += 1
-                    for j in range(raw_units[i].diac_count):
-                        out_cps[out_pos] = raw_units[i].diacs[j]
-                        out_pos += 1
+                    if not strip_tashkeel:
+                        for j in range(raw_units[i].diac_count):
+                            out_cps[out_pos] = raw_units[i].diacs[j]
+                            out_pos += 1
         return out_pos
 
     # Pass 1: Lam-Alef ligatures
@@ -354,14 +366,15 @@ cdef int shape_and_reverse_word_c(
                 lig_units[lig_count].lam_alef_iso = iso_la
                 lig_units[lig_count].lam_alef_fin = fin_la
                 lig_units[lig_count].diac_count = 0
-                for j in range(raw_units[i].diac_count):
-                    if lig_units[lig_count].diac_count < 8:
-                        lig_units[lig_count].diacs[lig_units[lig_count].diac_count] = raw_units[i].diacs[j]
-                        lig_units[lig_count].diac_count += 1
-                for j in range(raw_units[i + 1].diac_count):
-                    if lig_units[lig_count].diac_count < 8:
-                        lig_units[lig_count].diacs[lig_units[lig_count].diac_count] = raw_units[i + 1].diacs[j]
-                        lig_units[lig_count].diac_count += 1
+                if not strip_tashkeel:
+                    for j in range(raw_units[i].diac_count):
+                        if lig_units[lig_count].diac_count < 8:
+                            lig_units[lig_count].diacs[lig_units[lig_count].diac_count] = raw_units[i].diacs[j]
+                            lig_units[lig_count].diac_count += 1
+                    for j in range(raw_units[i + 1].diac_count):
+                        if lig_units[lig_count].diac_count < 8:
+                            lig_units[lig_count].diacs[lig_units[lig_count].diac_count] = raw_units[i + 1].diacs[j]
+                            lig_units[lig_count].diac_count += 1
                 lig_count += 1
                 i += 2
                 continue
@@ -430,21 +443,23 @@ cdef int shape_and_reverse_word_c(
             for i in range(seg_start, seg_start + tok_lens[k]):
                 out_cps[out_pos] = lig_units[i].shaped_cp
                 out_pos += 1
-                for j in range(lig_units[i].diac_count):
-                    out_cps[out_pos] = lig_units[i].diacs[j]
-                    out_pos += 1
+                if not strip_tashkeel:
+                    for j in range(lig_units[i].diac_count):
+                        out_cps[out_pos] = lig_units[i].diacs[j]
+                        out_pos += 1
         else:
             for i in range(seg_start + tok_lens[k] - 1, seg_start - 1, -1):
                 out_cps[out_pos] = lig_units[i].shaped_cp
                 out_pos += 1
-                for j in range(lig_units[i].diac_count):
-                    out_cps[out_pos] = lig_units[i].diacs[j]
-                    out_pos += 1
+                if not strip_tashkeel:
+                    for j in range(lig_units[i].diac_count):
+                        out_cps[out_pos] = lig_units[i].diacs[j]
+                        out_pos += 1
 
     return out_pos
 
 
-cdef str _reverse_arabic_word(str word, bint shape=True):
+cdef str _reverse_arabic_word(str word, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
     """Bridge for Python callers."""
     cdef Py_ssize_t length = len(word)
     if length == 0:
@@ -454,7 +469,10 @@ cdef str _reverse_arabic_word(str word, bint shape=True):
     cdef Py_ssize_t i
     for i in range(min(length, 512)):
         in_buf[i] = <unsigned int>ord(word[i])
-    cdef int out_len = shape_and_reverse_word_c(in_buf, min(<int>length, 512), out_buf, shape)
+    cdef int out_len = shape_and_reverse_word_c(
+        in_buf, min(<int>length, 512), out_buf,
+        shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature
+    )
     return "".join([chr(out_buf[i]) for i in range(out_len)])
 
 
@@ -700,7 +718,7 @@ cdef bint _has_arabic_in_bracket(str line, Py_ssize_t i, Py_ssize_t length):
     return False
 
 
-cdef str _reverse_segment(str segment, bint shape=True):
+cdef str _reverse_segment(str segment, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
     """Reverse an Arabic segment preserving words, numbers, and mirroring brackets."""
     cdef Py_ssize_t length = len(segment)
     cdef Py_ssize_t i = 0
@@ -735,7 +753,7 @@ cdef str _reverse_segment(str segment, bint shape=True):
                         break
                     i += 1
                 word = segment[start:i]
-                tokens.append(_reverse_arabic_word(word, shape=shape))
+                tokens.append(_reverse_arabic_word(word, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature))
             else:
                 while i < length and segment[i] not in (' ', '\t', '\n', '\r') and segment[i] not in BRACKET_PAIRS:
                     cp = <unsigned int>ord(segment[i])
@@ -748,7 +766,7 @@ cdef str _reverse_segment(str segment, bint shape=True):
     return "".join(tokens)
 
 
-cdef str _process_line(str line, bint smart_mode=True, bint shape=True):
+cdef str _process_line(str line, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
     """Process a single line."""
     if not has_arabic(line):
         return line
@@ -766,7 +784,7 @@ cdef str _process_line(str line, bint smart_mode=True, bint shape=True):
 
         if line.startswith("|") and line.endswith("|"):
             cells = line.split("|")
-            proc_cells = [_process_line(c, smart_mode=True, shape=shape) for c in cells[1:len(cells)-1]]
+            proc_cells = [_process_line(c, smart_mode=True, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature) for c in cells[1:len(cells)-1]]
             return prefix + "|" + "|".join(proc_cells) + "|"
 
     cdef Py_ssize_t length = len(line)
@@ -857,7 +875,7 @@ cdef str _process_line(str line, bint smart_mode=True, bint shape=True):
 
             i = seg_end
             segment = line[seg_start:seg_end]
-            result.append(_reverse_segment(segment, shape=shape))
+            result.append(_reverse_segment(segment, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature))
         else:
             result.append(line[i])
             i += 1
@@ -865,12 +883,13 @@ cdef str _process_line(str line, bint smart_mode=True, bint shape=True):
     return prefix + "".join(result)
 
 
-def process_text(str text, bint smart_mode=True, bint shape=True):
+def process_text(str text, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
     """
     Process Arabic prose for correct display in LTR terminals.
     If smart_mode is True, auto-skips code blocks, URLs, paths, commands.
     If shape is True, performs contextual shaping (Unicode Presentation Forms-B).
-    Tracks multiline code blocks across lines.
+    If strip_tashkeel is True, strips diacritics for clean uniform monospace terminal rendering.
+    If allah_ligature is True, renders Allah as single unified ligature \uFDF2.
     """
     cdef list lines = text.split('\n')
     cdef list out = []
@@ -890,9 +909,9 @@ def process_text(str text, bint smart_mode=True, bint shape=True):
                     if stripped.count("```") % 2 != 0:
                         in_code_block = True
                 else:
-                    out.append(_process_line(line, smart_mode=True, shape=shape))
+                    out.append(_process_line(line, smart_mode=True, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature))
         else:
-            out.append(_process_line(line, smart_mode=False, shape=shape))
+            out.append(_process_line(line, smart_mode=False, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature))
     return '\n'.join(out)
 
 
@@ -900,13 +919,13 @@ def process_text(str text, bint smart_mode=True, bint shape=True):
 reverse_arabic_text = process_text
 
 
-def process_batch(list texts, int num_threads=4, bint smart_mode=True, bint shape=True):
+def process_batch(list texts, int num_threads=4, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
     """Process multiple strings."""
     cdef Py_ssize_t n = len(texts)
     cdef list results = [None] * n
     cdef Py_ssize_t i
     for i in range(n):
-        results[i] = process_text(texts[i], smart_mode, shape)
+        results[i] = process_text(texts[i], smart_mode, shape, strip_tashkeel, allah_ligature)
     return results
 
 
@@ -915,15 +934,14 @@ def _process_chunk(tuple args):
     cdef list chunk = args[0]
     cdef bint smart_mode = args[1]
     cdef bint shape = args[2] if len(args) > 2 else True
-    return process_text('\n'.join(chunk), smart_mode=smart_mode, shape=shape).split('\n')
+    cdef bint strip_tashkeel = args[3] if len(args) > 3 else False
+    cdef bint allah_ligature = args[4] if len(args) > 4 else False
+    return process_text('\n'.join(chunk), smart_mode=smart_mode, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature).split('\n')
 
 
-def process_text_parallel(str text, int num_threads=0, bint smart_mode=True, bint shape=True):
+def process_text_parallel(str text, int num_threads=0, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
     """
     Process text using multiprocessing.Pool (1BRC technique).
-
-    This bypasses the GIL by using separate processes.
-    If num_threads is 0 or not specified, automatically decides based on text length.
     """
     if num_threads <= 0:
         num_threads = decide_process_count(text)
@@ -937,10 +955,10 @@ def process_text_parallel(str text, int num_threads=0, bint smart_mode=True, bin
     cdef Py_ssize_t n = len(lines)
 
     if n < 100 or num_threads == 1:
-        return process_text(text, smart_mode, shape)
+        return process_text(text, smart_mode, shape, strip_tashkeel, allah_ligature)
 
     chunks = split_lines(lines, num_threads, smart_mode)
-    chunk_args = [(chunk, smart_mode, shape) for chunk in chunks]
+    chunk_args = [(chunk, smart_mode, shape, strip_tashkeel, allah_ligature) for chunk in chunks]
 
     with multiprocessing.Pool(num_threads) as pool:
         results = pool.map(_process_chunk, chunk_args)
@@ -952,11 +970,9 @@ def process_text_parallel(str text, int num_threads=0, bint smart_mode=True, bin
     return '\n'.join(out)
 
 
-def process_file_parallel(str filepath, int num_threads=4, str output=None, bint smart_mode=True, bint shape=True):
+def process_file_parallel(str filepath, int num_threads=4, str output=None, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
     """
     1BRC-style parallel file processing.
-
-    Reads file, splits into chunks, processes in parallel, writes output.
     """
     import time
     start = time.perf_counter()

@@ -279,13 +279,13 @@ def _py_parse_and_shape_units(word):
     return lig_units
 
 
-def _py_render_unit(unit):
-    if unit.diacritics:
+def _py_render_unit(unit, strip_tashkeel=False):
+    if not strip_tashkeel and unit.diacritics:
         return unit.shaped_char + "".join(unit.diacritics)
     return unit.shaped_char
 
 
-def _py_reverse_arabic_word(word, shape=True):
+def _py_reverse_arabic_word(word, shape=True, strip_tashkeel=False, allah_ligature=False):
     """
     Reverse an Arabic word with contextual shaping (Presentation Forms-B)
     preserving Tashkeel (diacritics) on their base chars
@@ -293,6 +293,12 @@ def _py_reverse_arabic_word(word, shape=True):
     """
     if not word:
         return word
+
+    # Allah ligature replacement
+    if allah_ligature and shape:
+        clean_word = "".join(c for c in word if not _is_diacritic(ord(c)))
+        if clean_word == "الله":
+            return "\uFDF2"
 
     if not shape:
         sub_tokens = []
@@ -312,7 +318,8 @@ def _py_reverse_arabic_word(word, shape=True):
                     curr_type = "digit"
                     curr_token = [ch]
             elif is_diac and curr_type == "letter" and curr_token:
-                curr_token[-1] = curr_token[-1] + ch
+                if not strip_tashkeel:
+                    curr_token[-1] = curr_token[-1] + ch
             else:
                 if curr_type == "letter":
                     curr_token.append(ch)
@@ -366,10 +373,10 @@ def _py_reverse_arabic_word(word, shape=True):
     res_parts = []
     for t_type, token_list in sub_tokens:
         if t_type == "digit":
-            res_parts.append("".join(_py_render_unit(u) for u in token_list))
+            res_parts.append("".join(_py_render_unit(u, strip_tashkeel) for u in token_list))
         else:
             token_list.reverse()
-            res_parts.append("".join(_py_render_unit(u) for u in token_list))
+            res_parts.append("".join(_py_render_unit(u, strip_tashkeel) for u in token_list))
 
     res_parts.reverse()
     return "".join(res_parts)
@@ -468,7 +475,7 @@ def _has_arabic_in_bracket(line, i, length):
     return False
 
 
-def _py_reverse_segment(segment, shape=True):
+def _py_reverse_segment(segment, shape=True, strip_tashkeel=False, allah_ligature=False):
     """Reverse an Arabic segment preserving words, numbers, and mirroring brackets."""
     length = len(segment)
     i = 0
@@ -500,7 +507,7 @@ def _py_reverse_segment(segment, shape=True):
                         break
                     i += 1
                 word = segment[start:i]
-                tokens.append(_py_reverse_arabic_word(word, shape=shape))
+                tokens.append(_py_reverse_arabic_word(word, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature))
             else:
                 while i < length and segment[i] not in (' ', '\t', '\n', '\r') and segment[i] not in BRACKET_PAIRS:
                     c = ord(segment[i])
@@ -513,7 +520,7 @@ def _py_reverse_segment(segment, shape=True):
     return "".join(tokens)
 
 
-def py_process_line(line, smart_mode=True, shape=True):
+def py_process_line(line, smart_mode=True, shape=True, strip_tashkeel=False, allah_ligature=False):
     """Process a single line in pure Python."""
     if not py_has_arabic(line):
         return line
@@ -529,7 +536,7 @@ def py_process_line(line, smart_mode=True, shape=True):
 
         if line.startswith("|") and line.endswith("|"):
             cells = line.split("|")
-            proc_cells = [py_process_line(c, smart_mode=True, shape=shape) for c in cells[1:-1]]
+            proc_cells = [py_process_line(c, smart_mode=True, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature) for c in cells[1:-1]]
             return prefix + "|" + "|".join(proc_cells) + "|"
 
     length = len(line)
@@ -582,8 +589,7 @@ def py_process_line(line, smart_mode=True, shape=True):
             seg_start = i
             last_arabic_i = i
             while i < length:
-                ch = line[i]
-                if _is_arabic(ch):
+                if _is_arabic(line[i]):
                     last_arabic_i = i
                     i += 1
                 elif _scan_ansi_escape(line, i, length) > 0 or (smart_mode and (line.startswith("```", i) or line[i] == '`' or _is_path_start(line, i, length))):
@@ -603,19 +609,18 @@ def py_process_line(line, smart_mode=True, shape=True):
                     seg_end = last_arabic_i + 1 + idx
                 else:
                     while seg_end > last_arabic_i + 1:
-                        prev_ch = line[seg_end - 1]
-                        if prev_ch in (' ', '\t'):
+                        if line[seg_end - 1] in (' ', '\t'):
                             seg_end -= 1
-                        elif prev_ch in BRACKET_PAIRS or prev_ch in ('.', ',', '!', '?', ':', ';', '-'):
+                        elif line[seg_end - 1] in BRACKET_PAIRS or line[seg_end - 1] in ('.', ',', '!', '?', ':', ';', '-'):
                             break
-                        elif _is_digit_char(prev_ch):
+                        elif _is_digit_char(line[seg_end - 1]):
                             break
                         else:
                             break
 
             i = seg_end
             segment = line[seg_start:seg_end]
-            result.append(_py_reverse_segment(segment, shape=shape))
+            result.append(_py_reverse_segment(segment, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature))
         else:
             result.append(line[i])
             i += 1
@@ -623,11 +628,12 @@ def py_process_line(line, smart_mode=True, shape=True):
     return prefix + "".join(result)
 
 
-def py_process_text(text, smart_mode=True, shape=True):
-    """Process Arabic prose. Auto-skip code blocks, etc. if smart_mode is True."""
+def py_process_text(text, smart_mode=True, shape=True, strip_tashkeel=False, allah_ligature=False):
+    """Process Arabic text in pure Python."""
     lines = text.split('\n')
     out = []
     in_code_block = False
+
     for line in lines:
         if smart_mode:
             stripped = line.strip()
@@ -641,10 +647,11 @@ def py_process_text(text, smart_mode=True, shape=True):
                     if stripped.count("```") % 2 != 0:
                         in_code_block = True
                 else:
-                    out.append(py_process_line(line, smart_mode=True, shape=shape))
+                    out.append(py_process_line(line, smart_mode=True, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature))
         else:
-            out.append(py_process_line(line, smart_mode=False, shape=shape))
+            out.append(py_process_line(line, smart_mode=False, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature))
     return '\n'.join(out)
+
 
 py_reverse_arabic_text = py_process_text
 
@@ -862,6 +869,10 @@ def main():
                         help='Show performance stats')
     parser.add_argument('--no-smart', action='store_true',
                         help='Disable smart mode (processes everything as text)')
+    parser.add_argument('--no-tashkeel', '-nt', action='store_true',
+                        help='Strip Tashkeel diacritics for clean uniform monospace terminal rendering')
+    parser.add_argument('--allah-ligature', '-al', action='store_true',
+                        help='Replace Allah with dedicated single-cell ligature (\uFDF2)')
     parser.add_argument('--stream', '-S', action='store_true',
                         help='Process stdin line-by-line in real-time (for logs/tail -f)')
     parser.add_argument('--daemon', '-d', action='store_true',
@@ -876,14 +887,16 @@ def main():
         return
 
     smart_mode = not args.no_smart
+    strip_tashkeel = args.no_tashkeel
+    allah_ligature = args.allah_ligature
 
     # Stream mode: process line-by-line in real time
     if args.stream:
         for line in sys.stdin:
             if line.endswith('\n'):
-                sys.stdout.write(do_process_text(line[:-1], smart_mode) + '\n')
+                sys.stdout.write(do_process_text(line[:-1], smart_mode=smart_mode, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature) + '\n')
             else:
-                sys.stdout.write(do_process_text(line, smart_mode))
+                sys.stdout.write(do_process_text(line, smart_mode=smart_mode, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature))
             sys.stdout.flush()
         return
 
@@ -904,7 +917,7 @@ def main():
     # File processing (1BRC-style mmap + parallel)
     if args.file:
         num_threads = max(1, min(32, args.threads)) if args.threads is not None else 0
-        result = do_process_file(args.file, num_threads, args.output, smart_mode)
+        result = do_process_file(args.file, num_threads, args.output, smart_mode=smart_mode, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature)
         return
 
     # Text input
@@ -924,9 +937,9 @@ def main():
     start = time.perf_counter()
 
     if num_threads > 1 and text.count('\n') >= 100:
-        result = do_process_text_parallel(text, num_threads, smart_mode)
+        result = do_process_text_parallel(text, num_threads, smart_mode=smart_mode, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature)
     else:
-        result = do_process_text(text, smart_mode)
+        result = do_process_text(text, smart_mode=smart_mode, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature)
 
     elapsed = time.perf_counter() - start
 
