@@ -19,22 +19,27 @@ def test_has_arabic():
 
 def test_basic_reversal():
     inp = "الحمد لله"
-    expected = "هلل دمحلا"
+    expected = "ﻪﻠﻟ ﺪﻤﺤﻟﺍ"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl.reverse_arabic_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
     assert arabic_rtl_cli.reverse_arabic_text(inp) == expected
 
+    # Test raw reversal mode (shape=False)
+    expected_raw = "هلل دمحلا"
+    assert arabic_rtl.process_text(inp, shape=False) == expected_raw
+    assert arabic_rtl_cli.py_process_text(inp, shape=False) == expected_raw
+
 
 def test_spaces_preservation():
     # Test spaces between Arabic words and trailing spaces before non-Arabic text
     inp = "مرحبا      world"
-    expected = "ابحرم      world"
+    expected = "ﺎﺒﺣﺮﻣ      world"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
 
     inp2 = "  مرحبا  علي  "
-    expected2 = "  يلع  ابحرم  "
+    expected2 = "  ﻲﻠﻋ  ﺎﺒﺣﺮﻣ  "
     assert arabic_rtl.process_text(inp2) == expected2
     assert arabic_rtl_cli.py_process_text(inp2) == expected2
 
@@ -42,25 +47,25 @@ def test_spaces_preservation():
 def test_smart_mode_skipping():
     # Code blocks
     inp = "مرحبا ```code``` عالم"
-    expected = "ابحرم ```code``` ملاع"
+    expected = "ﺎﺒﺣﺮﻣ ```code``` ﻢﻟﺎﻋ"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
 
     # Inline code
     inp_inline = "مرحبا `var_name` عالم"
-    expected_inline = "ابحرم `var_name` ملاع"
+    expected_inline = "ﺎﺒﺣﺮﻣ `var_name` ﻢﻟﺎﻋ"
     assert arabic_rtl.process_text(inp_inline) == expected_inline
     assert arabic_rtl_cli.py_process_text(inp_inline) == expected_inline
 
     # URLs
     inp_url = "مرحبا https://example.com/test عالم"
-    expected_url = "ابحرم https://example.com/test ملاع"
+    expected_url = "ﺎﺒﺣﺮﻣ https://example.com/test ﻢﻟﺎﻋ"
     assert arabic_rtl.process_text(inp_url) == expected_url
     assert arabic_rtl_cli.py_process_text(inp_url) == expected_url
 
     # Paths
     inp_path = "مرحبا /usr/local/bin عالم"
-    expected_path = "ابحرم /usr/local/bin ملاع"
+    expected_path = "ﺎﺒﺣﺮﻣ /usr/local/bin ﻢﻟﺎﻋ"
     assert arabic_rtl.process_text(inp_path) == expected_path
     assert arabic_rtl_cli.py_process_text(inp_path) == expected_path
 
@@ -71,7 +76,7 @@ def test_no_smart_mode():
     result_python = arabic_rtl_cli.py_process_text(inp, smart_mode=False)
     assert result_cython == result_python
     assert "`" in result_cython
-    assert result_cython.startswith("ابحرم")
+    assert result_cython.startswith("ﺎﺒﺣﺮﻣ")
 
 
 def test_parallel_processing():
@@ -96,14 +101,14 @@ def test_file_processing():
         arabic_rtl.process_file_parallel(f_path, num_threads=2, output=out_file)
         with open(out_file, 'r', encoding='utf-8') as f_out:
             content = f_out.read()
-        assert content == "هللا ةمحرو مكيلع مالسلا\n" * 50
+        assert content == "ﻪﻠﻟﺍ ﺔﻤﺣﺭﻭ ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ\n" * 50
 
         # Also test Python fallback file processing mmap
         out_file_py = f_path + ".py.out"
         arabic_rtl_cli.py_process_file_mmap(f_path, num_threads=2, output=out_file_py)
         with open(out_file_py, 'r', encoding='utf-8') as f_out:
             content_py = f_out.read()
-        assert content_py == "هللا ةمحرو مكيلع مالسلا\n" * 50
+        assert content_py == "ﻪﻠﻟﺍ ﺔﻤﺣﺭﻭ ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ\n" * 50
     finally:
         if os.path.exists(f_path):
             os.remove(f_path)
@@ -116,13 +121,13 @@ def test_file_processing():
 def test_cli_positional_arg():
     cmd = [sys.executable, "arabic_rtl_cli.py", "مرحبا بالعالم"]
     res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    assert "ملاعلاب ابحرم" in res.stdout
+    assert "ﻢﻟﺎﻌﻟﺎﺑ ﺎﺒﺣﺮﻣ" in res.stdout
 
 
 def test_cli_stdin():
     cmd = [sys.executable, "arabic_rtl_cli.py"]
     res = subprocess.run(cmd, input="السلام عليكم", capture_output=True, text=True, check=True)
-    assert "مكيلع مالسلا" in res.stdout
+    assert "ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ" in res.stdout
 
 
 def test_cli_no_smart_flag():
@@ -134,7 +139,7 @@ def test_cli_no_smart_flag():
 def test_cli_show_stats():
     cmd = [sys.executable, "arabic_rtl_cli.py", "--show-stats", "السلام عليكم"]
     res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    assert "مكيلع مالسلا" in res.stdout
+    assert "ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ" in res.stdout
     assert "---" in res.stderr
     assert "proc(s)" in res.stderr or "lines/sec" in res.stderr
 
@@ -158,7 +163,7 @@ def test_cli_file_options():
         subprocess.run(cmd, check=True)
         with open(out_path, 'r', encoding='utf-8') as f_out:
             out_text = f_out.read()
-        assert out_text == "ميحرلا نمحرلا هللا مسب\n"
+        assert out_text == "ﻢﻴﺣﺮﻟﺍ ﻦﻤﺣﺮﻟﺍ ﻪﻠﻟﺍ ﻢﺴﺑ\n"
     finally:
         if os.path.exists(in_path):
             os.remove(in_path)
@@ -182,7 +187,7 @@ def test_daemon_mode_lifecycle():
         # Test CLI daemon mode flag
         cmd = [sys.executable, "arabic_rtl_cli.py", "--daemon", "السلام عليكم"]
         cli_res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        assert cli_res.stdout.strip() == "مكيلع مالسلا"
+        assert cli_res.stdout.strip() == "ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ"
     finally:
         # Stop daemon
         stop_res = subprocess.run([sys.executable, "arabic_rtl_daemon.py", "stop"], capture_output=True, text=True, check=True)
@@ -198,7 +203,7 @@ def test_cli_no_args_help():
 
 def test_tashkeel_reversal():
     inp = "مَرْحَبًا"
-    expected = "ابًحَرْمَ"
+    expected = "ﺎﺒًﺣَﺮْﻣَ"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
 
@@ -206,45 +211,43 @@ def test_tashkeel_reversal():
 def test_numbers_preservation():
     # Test ASCII digits, Arabic-Indic digits ٠-٩, and mixed
     inp_ascii = "عام 2026"
-    expected_ascii = "2026 ماع"
+    expected_ascii = "2026 ﻡﺎﻋ"
     assert arabic_rtl.process_text(inp_ascii) == expected_ascii
     assert arabic_rtl_cli.py_process_text(inp_ascii) == expected_ascii
 
     inp_arabic_digits = "عام٢٠٢٦"
-    expected_arabic_digits = "٢٠٢٦ماع"
+    expected_arabic_digits = "٢٠٢٦ﻡﺎﻋ"
     assert arabic_rtl.process_text(inp_arabic_digits) == expected_arabic_digits
     assert arabic_rtl_cli.py_process_text(inp_arabic_digits) == expected_arabic_digits
 
 
-
 def test_ansi_escape_sequences():
     inp = "\x1b[31mالسلام عليكم\x1b[0m"
-    expected = "\x1b[31mمكيلع مالسلا\x1b[0m"
+    expected = "\x1b[31mﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ\x1b[0m"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
 
     # Test non-letter ANSI terminators like ~ or ?
     inp_bracket = "\x1b[200~السلام عليكم\x1b[201~"
-    expected_bracket = "\x1b[200~مكيلع مالسلا\x1b[201~"
+    expected_bracket = "\x1b[200~ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ\x1b[201~"
     assert arabic_rtl.process_text(inp_bracket) == expected_bracket
     assert arabic_rtl_cli.py_process_text(inp_bracket) == expected_bracket
 
 
 def test_bracket_mirroring():
     inp = "مرحبا (123) بك"
-    expected = "كب (123) ابحرم"
+    expected = "ﻚﺑ (123) ﺎﺒﺣﺮﻣ"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
 
     inp_brackets = "اختبار [عالم] {1}"
-    expected_brackets = "{1} [ملاع] رابتخا"
+    expected_brackets = "{1} [ﻢﻟﺎﻋ] ﺭﺎﺒﺘﺧﺍ"
     assert arabic_rtl.process_text(inp_brackets) == expected_brackets
     assert arabic_rtl_cli.py_process_text(inp_brackets) == expected_brackets
 
 
 def test_windows_paths_skipping():
     inp = "انظر C:\\Users\\test هنا"
-    expected = "انظر C:\\Users\\test هنا"
     res_cython = arabic_rtl.process_text(inp)
     res_python = arabic_rtl_cli.py_process_text(inp)
     assert "C:\\Users\\test" in res_cython
@@ -253,12 +256,12 @@ def test_windows_paths_skipping():
 
 def test_quranic_and_smart_brackets():
     inp = "﴿قُلْ هُوَ اللَّهُ أَحَدٌ﴾"
-    expected = "﴿دٌحَأَ هُلَّلا وَهُ لْقُ﴾"
+    expected = "﴿ﺪٌﺣَﺃَ ﻪُﻠَّﻟﺍ ﻮَﻫُ ﻞْﻗُ﴾"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
 
     inp_quotes = "قال “السلام عليكم”"
-    expected_quotes = "“مكيلع مالسلا” لاق"
+    expected_quotes = "“ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ” ﻝﺎﻗ"
     assert arabic_rtl.process_text(inp_quotes) == expected_quotes
     assert arabic_rtl_cli.py_process_text(inp_quotes) == expected_quotes
 
@@ -269,8 +272,8 @@ def test_multiline_code_blocks():
     res_python = arabic_rtl_cli.py_process_text(inp)
     assert res_cython == res_python
     assert "print('السلام عليكم')" in res_cython
-    assert "ابحرم" in res_cython
-    assert "ملاع" in res_cython
+    assert "ﺎﺒﺣﺮﻣ" in res_cython
+    assert "ﻢﻟﺎﻋ" in res_cython
 
 
 def test_file_and_mailto_urls():
@@ -285,14 +288,14 @@ def test_file_and_mailto_urls():
 
 def test_markdown_heading():
     inp = "# عنوان المقال"
-    expected = "# لاقملا ناونع"
+    expected = "# ﻝﺎﻘﻤﻟﺍ ﻥﺍﻮﻨﻋ"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
 
 
 def test_three_byte_ansi_sequences():
     inp = "\x1b(Bالسلام عليكم\x1b)0"
-    expected = "\x1b(Bمكيلع مالسلا\x1b)0"
+    expected = "\x1b(Bﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ\x1b)0"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
 
@@ -308,7 +311,7 @@ def test_env_variable_paths():
 
 def test_extended_brackets():
     inp = "اختبار 【عالم】 〔1〕"
-    expected = "〔1〕 【ملاع】 رابتخا"
+    expected = "〔1〕 【ﻢﻟﺎﻋ】 ﺭﺎﺒﺘﺧﺍ"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
 
@@ -329,12 +332,12 @@ def test_extended_a_diacritics():
 
 def test_arabic_punctuation_reversal():
     inp = "مرحبا، عالم"
-    expected = "ملاع ،ابحرم"
+    expected = "ﻢﻟﺎﻋ ،ﺎﺒﺣﺮﻣ"
     assert arabic_rtl.process_text(inp) == expected
     assert arabic_rtl_cli.py_process_text(inp) == expected
 
     inp_q = "كيف حالك؟ بخير"
-    expected_q = "ريخب ؟كلاح فيك"
+    expected_q = "ﺮﻴﺨﺑ ؟ﻚﻟﺎﺣ ﻒﻴﻛ"
     assert arabic_rtl.process_text(inp_q) == expected_q
     assert arabic_rtl_cli.py_process_text(inp_q) == expected_q
 
@@ -374,13 +377,13 @@ def test_daemon_stale_files_cleanup():
 
 def test_brackets_mirroring_and_nesting():
     cases = [
-        ("(نص عربي)", "(يبرع صن)"),
-        ("[نص عربي]", "[يبرع صن]"),
-        ("«نص عربي»", "«يبرع صن»"),
-        ("“نص عربي”", "“يبرع صن”"),
-        ("‹نص عربي›", "‹يبرع صن›"),
-        ("﴿نص عربي﴾", "﴿يبرع صن﴾"),
-        ("（نص عربي）", "（يبرع صن）"),
+        ("(نص عربي)", "(ﻲﺑﺮﻋ ﺺﻧ)"),
+        ("[نص عربي]", "[ﻲﺑﺮﻋ ﺺﻧ]"),
+        ("«نص عربي»", "«ﻲﺑﺮﻋ ﺺﻧ»"),
+        ("“نص عربي”", "“ﻲﺑﺮﻋ ﺺﻧ”"),
+        ("‹نص عربي›", "‹ﻲﺑﺮﻋ ﺺﻧ›"),
+        ("﴿نص عربي﴾", "﴿ﻲﺑﺮﻋ ﺺﻧ﴾"),
+        ("（نص عربي）", "（ﻲﺑﺮﻋ ﺺﻧ）"),
     ]
     for inp, exp in cases:
         assert arabic_rtl.process_text(inp) == exp
@@ -389,14 +392,14 @@ def test_brackets_mirroring_and_nesting():
 
 def test_numbers_floats_percentages_dates_times():
     cases = [
-        ("النسبة هي 12.5% تقريبا", "ابيرقت 12.5% يه ةبسنلا"),
-        ("المبلغ 1,000 دينار", "رانيد 1,000 غلبملا"),
-        ("التاريخ 2026/08/20", "2026/08/20 خيراتلا"),
-        ("التاريخ 2026-08-20", "2026-08-20 خيراتلا"),
-        ("الوقت 12:30", "12:30 تقولا"),
-        ("الوقت 12:30:45", "12:30:45 تقولا"),
-        ("درجة الحرارة +25 مئوية", "ةيوئم +25 ةرارحلا ةجرد"),
-        ("الرصيد -50 دولار", "رالود -50 ديصرلا"),
+        ("النسبة هي 12.5% تقريبا", "ﺎﺒﻳﺮﻘﺗ 12.5% ﻲﻫ ﺔﺒﺴﻨﻟﺍ"),
+        ("المبلغ 1,000 دينار", "ﺭﺎﻨﻳﺩ 1,000 ﻎﻠﺒﻤﻟﺍ"),
+        ("التاريخ 2026/08/20", "2026/08/20 ﺦﻳﺭﺎﺘﻟﺍ"),
+        ("التاريخ 2026-08-20", "2026-08-20 ﺦﻳﺭﺎﺘﻟﺍ"),
+        ("الوقت 12:30", "12:30 ﺖﻗﻮﻟﺍ"),
+        ("الوقت 12:30:45", "12:30:45 ﺖﻗﻮﻟﺍ"),
+        ("درجة الحرارة +25 مئوية", "ﺔﻳﻮﺌﻣ +25 ﺓﺭﺍﺮﺤﻟﺍ ﺔﺟﺭﺩ"),
+        ("الرصيد -50 دولار", "ﺭﻻﻭﺩ -50 ﺪﻴﺻﺮﻟﺍ"),
     ]
     for inp, exp in cases:
         assert arabic_rtl.process_text(inp) == exp
@@ -405,9 +408,9 @@ def test_numbers_floats_percentages_dates_times():
 
 def test_arabic_with_english_words_in_sentence():
     cases = [
-        ("البرنامج مكتوب بلغة Python", "Python ةغلب بوتكم جمانربلا"),
-        ("هذا ملف README.md", "README.md فلم اذه"),
-        ("اضغط على زر OK للمتابعة", "ةعباتملل OK رز ىلع طغضا"),
+        ("البرنامج مكتوب بلغة Python", "Python ﺔﻐﻠﺑ ﺏﻮﺘﻜﻣ ﺞﻣﺎﻧﺮﺒﻟﺍ"),
+        ("هذا ملف README.md", "README.md ﻒﻠﻣ ﺍﺬﻫ"),
+        ("اضغط على زر OK للمتابعة", "ﺔﻌﺑﺎﺘﻤﻠﻟ OK ﺭﺯ ﻰﻠﻋ ﻂﻐﺿﺍ"),
     ]
     for inp, exp in cases:
         assert arabic_rtl.process_text(inp) == exp
@@ -416,14 +419,14 @@ def test_arabic_with_english_words_in_sentence():
 
 def test_markdown_prefixes_and_headers():
     cases = [
-        ("# عنوان رئيسي", "# يسيئر ناونع"),
-        ("## عنوان فرعي", "## يعرف ناونع"),
-        ("### قسم ثالث", "### ثلاث مسق"),
-        ("- [x] مهمة مكتملة", "- [x] ةلمتكم ةمهم"),
-        ("- [ ] مهمة متبقية", "- [ ] ةيقبتم ةمهم"),
-        ("> اقتباس مهم", "> مهم سابتقا"),
-        ("> [!NOTE] ملاحظة هامة", "> [!NOTE] ةماه ةظحالم"),
-        ("1. العنصر الأول", "1. لوألا رصنعلا"),
+        ("# عنوان رئيسي", "# ﻲﺴﻴﺋﺭ ﻥﺍﻮﻨﻋ"),
+        ("## عنوان فرعي", "## ﻲﻋﺮﻓ ﻥﺍﻮﻨﻋ"),
+        ("### قسم ثالث", "### ﺚﻟﺎﺛ ﻢﺴﻗ"),
+        ("- [x] مهمة مكتملة", "- [x] ﺔﻠﻤﺘﻜﻣ ﺔﻤﻬﻣ"),
+        ("- [ ] مهمة متبقية", "- [ ] ﺔﻴﻘﺒﺘﻣ ﺔﻤﻬﻣ"),
+        ("> اقتباس مهم", "> ﻢﻬﻣ ﺱﺎﺒﺘﻗﺍ"),
+        ("> [!NOTE] ملاحظة هامة", "> [!NOTE] ﺔﻣﺎﻫ ﺔﻈﺣﻼﻣ"),
+        ("1. العنصر الأول", "1. ﻝﻭﻷﺍ ﺮﺼﻨﻌﻟﺍ"),
     ]
     for inp, exp in cases:
         assert arabic_rtl.process_text(inp) == exp
@@ -435,8 +438,8 @@ def test_markdown_tables():
     res_cython = arabic_rtl.process_text(inp)
     res_python = arabic_rtl_cli.py_process_text(inp)
     assert res_cython == res_python
-    assert "مسالا" in res_cython
-    assert "دمحأ" in res_cython
+    assert "ﻢﺳﻻﺍ" in res_cython
+    assert "ﺪﻤﺣﺃ" in res_cython
     assert "25" in res_cython
 
 
@@ -471,7 +474,7 @@ def test_cli_stream_mode():
     cmd = [sys.executable, "arabic_rtl_cli.py", "--stream"]
     inp = "مرحبا بالعالم\nسطر ثاني\n"
     res = subprocess.run(cmd, input=inp, capture_output=True, text=True, check=True)
-    expected = "ملاعلاب ابحرم\nيناث رطس\n"
+    expected = "ﻢﻟﺎﻌﻟﺎﺑ ﺎﺒﺣﺮﻣ\nﻲﻧﺎﺛ ﺮﻄﺳ\n"
     assert res.stdout == expected
 
 

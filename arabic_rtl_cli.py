@@ -129,55 +129,250 @@ def _py_scan_number(text, i, length):
     return None, 0
 
 
-def _py_reverse_arabic_word(word):
+# ══════════════════════════════════════════════════════════════
+# UNICODE SHAPING TABLE (Isolated, Final, Medial, Initial, Left-Join)
+# ══════════════════════════════════════════════════════════════
+
+SHAPING_TABLE = {
+    # Hamza & variants
+    '\u0621': ('\uFE80', '\uFE80', '', '', False),        # ء
+    '\u0622': ('\uFE81', '\uFE82', '', '', False),        # آ
+    '\u0623': ('\uFE83', '\uFE84', '', '', False),        # أ
+    '\u0624': ('\uFE85', '\uFE86', '', '', False),        # ؤ
+    '\u0625': ('\uFE87', '\uFE88', '', '', False),        # إ
+    '\u0626': ('\uFE89', '\uFE8A', '\uFE8C', '\uFE8B', True),  # ئ
+    '\u0627': ('\uFE8D', '\uFE8E', '', '', False),        # ا
+    '\u0628': ('\uFE8F', '\uFE90', '\uFE92', '\uFE91', True),  # ب
+    '\u0629': ('\uFE93', '\uFE94', '', '', False),        # ة
+    '\u062A': ('\uFE95', '\uFE96', '\uFE98', '\uFE97', True),  # ت
+    '\u062B': ('\uFE99', '\uFE9A', '\uFE9C', '\uFE9B', True),  # ث
+    '\u062C': ('\uFE9D', '\uFE9E', '\uFEA0', '\uFE9F', True),  # ج
+    '\u062D': ('\uFEA1', '\uFEA2', '\uFEA4', '\uFEA3', True),  # ح
+    '\u062E': ('\uFEA5', '\uFEA6', '\uFEA8', '\uFEA7', True),  # خ
+    '\u062F': ('\uFEA9', '\uFEAA', '', '', False),        # د
+    '\u0630': ('\uFEAB', '\uFEAC', '', '', False),        # ذ
+    '\u0631': ('\uFEAD', '\uFEAE', '', '', False),        # ر
+    '\u0632': ('\uFEAF', '\uFEB0', '', '', False),        # ز
+    '\u0633': ('\uFEB1', '\uFEB2', '\uFEB4', '\uFEB3', True),  # س
+    '\u0634': ('\uFEB5', '\uFEB6', '\uFEB8', '\uFEB7', True),  # ش
+    '\u0635': ('\uFEB9', '\uFEBA', '\uFEBC', '\uFEBB', True),  # ص
+    '\u0636': ('\uFEBD', '\uFEBE', '\uFEC0', '\uFEBF', True),  # ض
+    '\u0637': ('\uFEC1', '\uFEC2', '\uFEC4', '\uFEC3', True),  # ط
+    '\u0638': ('\uFEC5', '\uFEC6', '\uFEC8', '\uFEC7', True),  # ظ
+    '\u0639': ('\uFEC9', '\uFECA', '\uFECC', '\uFECB', True),  # ع
+    '\u063A': ('\uFECD', '\uFECE', '\uFED0', '\uFECF', True),  # غ
+    '\u0640': ('\u0640', '\u0640', '\u0640', '\u0640', True),  # ـ TATWEEL
+    '\u0641': ('\uFED1', '\uFED2', '\uFED4', '\uFED3', True),  # ف
+    '\u0642': ('\uFED5', '\uFED6', '\uFED8', '\uFED7', True),  # ق
+    '\u0643': ('\uFED9', '\uFEDA', '\uFEDC', '\uFEDB', True),  # ك
+    '\u0644': ('\uFEDD', '\uFEDE', '\uFEE0', '\uFEDF', True),  # ل
+    '\u0645': ('\uFEE1', '\uFEE2', '\uFEE4', '\uFEE3', True),  # م
+    '\u0646': ('\uFEE5', '\uFEE6', '\uFEE8', '\uFEE7', True),  # ن
+    '\u0647': ('\uFEE9', '\uFEEA', '\uFEEC', '\uFEEB', True),  # ه
+    '\u0648': ('\uFEED', '\uFEEE', '', '', False),        # و
+    '\u0649': ('\uFEEF', '\uFEF0', '\uFEF4', '\uFEF3', True),  # ى (Alef Maksura with graceful medial/ini fallback)
+    '\u064A': ('\uFEF1', '\uFEF2', '\uFEF4', '\uFEF3', True),  # ي
+
+    # Extended Arabic (Quranic, Persian, Urdu)
+    '\u0671': ('\uFB50', '\uFB51', '', '', False),        # ٱ ALEF WASLA
+    '\u0679': ('\uFB66', '\uFB67', '\uFB69', '\uFB68', True),  # ٹ TTEH
+    '\u067E': ('\uFB56', '\uFB57', '\uFB59', '\uFB58', True),  # پ PEH
+    '\u0686': ('\uFB7A', '\uFB7B', '\uFB7D', '\uFB7C', True),  # چ TCHEH
+    '\u0688': ('\uFB88', '\uFB89', '', '', False),        # ڈ DDAL
+    '\u0691': ('\uFB8C', '\uFB8D', '', '', False),        # ڑ RREH
+    '\u0698': ('\uFB8A', '\uFB8B', '', '', False),        # ژ JEH
+    '\u06AF': ('\uFB92', '\uFB93', '\uFB95', '\uFB94', True),  # گ GAF
+    '\u06BA': ('\uFB9E', '\uFB9F', '', '', False),        # ں NOON GHUNNA
+    '\u06CC': ('\uFBFC', '\uFBFD', '\uFBFF', '\uFBFE', True),  # ی FARSI YEH
+    '\u06D2': ('\uFBAE', '\uFBAF', '', '', False),        # ے YEH BARREE
+}
+
+LAM_ALEF_MAP = {
+    '\u0622': ('\uFEF5', '\uFEF6'),  # ل + آ -> ﻵ
+    '\u0623': ('\uFEF7', '\uFEF8'),  # ل + أ -> ﻷ
+    '\u0625': ('\uFEF9', '\uFEFA'),  # ل + إ -> ﻹ
+    '\u0627': ('\uFEFB', '\uFEFC'),  # ل + ا -> لا
+}
+
+
+class _PyLetterUnit:
+    __slots__ = ('base_char', 'diacritics', 'shaped_char', 'lam_alef_target')
+
+    def __init__(self, base_char, diacritics=None, lam_alef_target=None):
+        self.base_char = base_char
+        self.diacritics = diacritics or []
+        self.shaped_char = base_char
+        self.lam_alef_target = lam_alef_target
+
+
+def _py_parse_and_shape_units(word):
+    raw_units = []
+    curr_unit = None
+
+    for ch in word:
+        cp = ord(ch)
+        if _is_diacritic(cp):
+            if curr_unit is not None:
+                curr_unit.diacritics.append(ch)
+            else:
+                curr_unit = _PyLetterUnit(ch, [ch])
+                raw_units.append(curr_unit)
+                curr_unit = None
+        else:
+            curr_unit = _PyLetterUnit(ch)
+            raw_units.append(curr_unit)
+
+    # Pass 1: Lam-Alef ligatures
+    lig_units = []
+    n = len(raw_units)
+    i = 0
+    while i < n:
+        u = raw_units[i]
+        if u.base_char == '\u0644' and i + 1 < n and raw_units[i + 1].base_char in LAM_ALEF_MAP:
+            next_u = raw_units[i + 1]
+            la_target = next_u.base_char
+            combined_diacs = u.diacritics + next_u.diacritics
+            lig_units.append(_PyLetterUnit(f"\u0644{la_target}", combined_diacs, lam_alef_target=la_target))
+            i += 2
+            continue
+        lig_units.append(u)
+        i += 1
+
+    # Pass 2: Contextual shaping
+    m = len(lig_units)
+    prev_connects_left = False
+
+    for idx in range(m):
+        u = lig_units[idx]
+
+        next_connects_right = False
+        if idx + 1 < m:
+            next_char = lig_units[idx + 1].base_char
+            if next_char in SHAPING_TABLE or lig_units[idx + 1].lam_alef_target:
+                next_connects_right = True
+
+        if u.lam_alef_target:
+            iso, fin = LAM_ALEF_MAP[u.lam_alef_target]
+            u.shaped_char = fin if prev_connects_left else iso
+            prev_connects_left = False
+            continue
+
+        base = u.base_char
+        if base not in SHAPING_TABLE:
+            u.shaped_char = base
+            prev_connects_left = False
+            continue
+
+        iso, fin, med, ini, connects_left = SHAPING_TABLE[base]
+
+        if prev_connects_left and next_connects_right and med:
+            u.shaped_char = med
+        elif prev_connects_left and fin:
+            u.shaped_char = fin
+        elif next_connects_right and ini:
+            u.shaped_char = ini
+        else:
+            u.shaped_char = iso
+
+        prev_connects_left = connects_left
+
+    return lig_units
+
+
+def _py_render_unit(unit):
+    if unit.diacritics:
+        return unit.shaped_char + "".join(unit.diacritics)
+    return unit.shaped_char
+
+
+def _py_reverse_arabic_word(word, shape=True):
     """
-    Reverse an Arabic word preserving Tashkeel (diacritics) on their base chars
-    and keeping digit sequences (ASCII 0-9, Arabic ٠-٩, Persian ۰-۹) in LTR order.
+    Reverse an Arabic word with contextual shaping (Presentation Forms-B)
+    preserving Tashkeel (diacritics) on their base chars
+    and keeping digit sequences in LTR order.
     """
     if not word:
         return word
 
+    if not shape:
+        sub_tokens = []
+        curr_type = ""
+        curr_token = []
+        for ch in word:
+            cp = ord(ch)
+            is_dig = _is_digit_char(ch)
+            is_diac = _is_diacritic(cp)
+
+            if is_dig:
+                if curr_type == "digit":
+                    curr_token.append(ch)
+                else:
+                    if curr_token:
+                        sub_tokens.append((curr_type, curr_token))
+                    curr_type = "digit"
+                    curr_token = [ch]
+            elif is_diac and curr_type == "letter" and curr_token:
+                curr_token[-1] = curr_token[-1] + ch
+            else:
+                if curr_type == "letter":
+                    curr_token.append(ch)
+                else:
+                    if curr_token:
+                        sub_tokens.append((curr_type, curr_token))
+                    curr_type = "letter"
+                    curr_token = [ch]
+
+        if curr_token:
+            sub_tokens.append((curr_type, curr_token))
+
+        res_tokens = []
+        for t_type, t_content in sub_tokens:
+            if t_type == "digit":
+                res_tokens.append("".join(t_content))
+            else:
+                t_content.reverse()
+                res_tokens.append("".join(t_content))
+
+        res_tokens.reverse()
+        return "".join(res_tokens)
+
+    units = _py_parse_and_shape_units(word)
     sub_tokens = []
     curr_type = ""
     curr_token = []
 
-    for ch in word:
-        cp = ord(ch)
-        is_dig = _is_digit_char(ch)
-        is_diac = _is_diacritic(cp)
-
+    for u in units:
+        is_dig = any(_is_digit_char(c) for c in u.base_char)
         if is_dig:
             if curr_type == "digit":
-                curr_token.append(ch)
+                curr_token.append(u)
             else:
                 if curr_token:
                     sub_tokens.append((curr_type, curr_token))
                 curr_type = "digit"
-                curr_token = [ch]
-        elif is_diac and curr_type == "letter" and curr_token:
-            curr_token[-1] = curr_token[-1] + ch
+                curr_token = [u]
         else:
-            if curr_type == "letter":
-                curr_token.append(ch)
+            if curr_type == "arabic":
+                curr_token.append(u)
             else:
                 if curr_token:
                     sub_tokens.append((curr_type, curr_token))
-                curr_type = "letter"
-                curr_token = [ch]
+                curr_type = "arabic"
+                curr_token = [u]
 
     if curr_token:
         sub_tokens.append((curr_type, curr_token))
 
-    res_tokens = []
-    for t_type, t_content in sub_tokens:
+    res_parts = []
+    for t_type, token_list in sub_tokens:
         if t_type == "digit":
-            res_tokens.append("".join(t_content))
+            res_parts.append("".join(_py_render_unit(u) for u in token_list))
         else:
-            t_content.reverse()
-            res_tokens.append("".join(t_content))
+            token_list.reverse()
+            res_parts.append("".join(_py_render_unit(u) for u in token_list))
 
-    res_tokens.reverse()
-    return "".join(res_tokens)
+    res_parts.reverse()
+    return "".join(res_parts)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -273,7 +468,7 @@ def _has_arabic_in_bracket(line, i, length):
     return False
 
 
-def _py_reverse_segment(segment):
+def _py_reverse_segment(segment, shape=True):
     """Reverse an Arabic segment preserving words, numbers, and mirroring brackets."""
     length = len(segment)
     i = 0
@@ -305,7 +500,7 @@ def _py_reverse_segment(segment):
                         break
                     i += 1
                 word = segment[start:i]
-                tokens.append(_py_reverse_arabic_word(word))
+                tokens.append(_py_reverse_arabic_word(word, shape=shape))
             else:
                 while i < length and segment[i] not in (' ', '\t', '\n', '\r') and segment[i] not in BRACKET_PAIRS:
                     c = ord(segment[i])
@@ -318,7 +513,7 @@ def _py_reverse_segment(segment):
     return "".join(tokens)
 
 
-def py_process_line(line, smart_mode=True):
+def py_process_line(line, smart_mode=True, shape=True):
     """Process a single line in pure Python."""
     if not py_has_arabic(line):
         return line
@@ -334,7 +529,7 @@ def py_process_line(line, smart_mode=True):
 
         if line.startswith("|") and line.endswith("|"):
             cells = line.split("|")
-            proc_cells = [py_process_line(c, smart_mode=True) for c in cells[1:-1]]
+            proc_cells = [py_process_line(c, smart_mode=True, shape=shape) for c in cells[1:-1]]
             return prefix + "|" + "|".join(proc_cells) + "|"
 
     length = len(line)
@@ -420,7 +615,7 @@ def py_process_line(line, smart_mode=True):
 
             i = seg_end
             segment = line[seg_start:seg_end]
-            result.append(_py_reverse_segment(segment))
+            result.append(_py_reverse_segment(segment, shape=shape))
         else:
             result.append(line[i])
             i += 1
@@ -428,7 +623,7 @@ def py_process_line(line, smart_mode=True):
     return prefix + "".join(result)
 
 
-def py_process_text(text, smart_mode=True):
+def py_process_text(text, smart_mode=True, shape=True):
     """Process Arabic prose. Auto-skip code blocks, etc. if smart_mode is True."""
     lines = text.split('\n')
     out = []
@@ -446,9 +641,9 @@ def py_process_text(text, smart_mode=True):
                     if stripped.count("```") % 2 != 0:
                         in_code_block = True
                 else:
-                    out.append(py_process_line(line, smart_mode=True))
+                    out.append(py_process_line(line, smart_mode=True, shape=shape))
         else:
-            out.append(py_process_line(line, smart_mode=False))
+            out.append(py_process_line(line, smart_mode=False, shape=shape))
     return '\n'.join(out)
 
 py_reverse_arabic_text = py_process_text
@@ -486,8 +681,9 @@ def _split_lines(lines, num_chunks, smart_mode=True):
 
 def _process_chunk(args):
     """Worker function for multiprocessing."""
-    chunk, smart_mode = args
-    return py_process_text('\n'.join(chunk), smart_mode=smart_mode).split('\n')
+    chunk, smart_mode = args[0], args[1]
+    shape = args[2] if len(args) > 2 else True
+    return py_process_text('\n'.join(chunk), smart_mode=smart_mode, shape=shape).split('\n')
 
 
 def py_decide_process_count(text_or_lines, max_processes=None):
@@ -543,7 +739,7 @@ def py_decide_process_count(text_or_lines, max_processes=None):
 py_get_optimal_process_count = py_decide_process_count
 
 
-def py_process_text_parallel(text, num_threads=0, smart_mode=True):
+def py_process_text_parallel(text, num_threads=0, smart_mode=True, shape=True):
     """Process text using multiprocessing.Pool (bypasses GIL)."""
     if num_threads is None or num_threads <= 0:
         num_threads = py_decide_process_count(text)
@@ -557,10 +753,10 @@ def py_process_text_parallel(text, num_threads=0, smart_mode=True):
     n = len(lines)
 
     if n < 100 or num_threads <= 1:
-        return py_process_text(text, smart_mode)
+        return py_process_text(text, smart_mode, shape)
 
     chunks = _split_lines(lines, num_threads, smart_mode)
-    chunk_args = [(chunk, smart_mode) for chunk in chunks]
+    chunk_args = [(chunk, smart_mode, shape) for chunk in chunks]
 
     with multiprocessing.Pool(num_threads) as pool:
         results = pool.map(_process_chunk, chunk_args)
@@ -572,7 +768,7 @@ def py_process_text_parallel(text, num_threads=0, smart_mode=True):
 
 
 # 1BRC Technique: mmap-based file reading
-def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True):
+def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True, shape=True):
     """Process file using mmap (zero-copy file access)."""
     if not os.path.exists(filepath):
         print(f"Error: File '{filepath}' not found.", file=sys.stderr)
@@ -598,9 +794,9 @@ def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True):
         num_threads = py_decide_process_count(text)
 
     if num_threads > 1:
-        result = py_process_text_parallel(text, num_threads, smart_mode)
+        result = py_process_text_parallel(text, num_threads, smart_mode, shape)
     else:
-        result = py_process_text(text, smart_mode)
+        result = py_process_text(text, smart_mode, shape)
 
     if output:
         try:
@@ -787,9 +983,9 @@ def run_benchmark():
 
     # Correctness checks
     tests = [
-        ("الحمد لله", "هلل دمحلا"),
-        ("السلام عليكم ورحمة الله", "هللا ةمحرو مكيلع مالسلا"),
-        ("بسم الله الرحمن الرحيم", "ميحرلا نمحرلا هللا مسب"),
+        ("الحمد لله", "ﻪﻠﻟ ﺪﻤﺤﻟﺍ"),
+        ("السلام عليكم ورحمة الله", "ﻪﻠﻟﺍ ﺔﻤﺣﺭﻭ ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ"),
+        ("بسم الله الرحمن الرحيم", "ﻢﻴﺣﺮﻟﺍ ﻦﻤﺣﺮﻟﺍ ﻪﻠﻟﺍ ﻢﺴﺑ"),
     ]
 
     print("  Correctness:")
