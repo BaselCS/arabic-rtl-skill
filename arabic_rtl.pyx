@@ -413,7 +413,7 @@ cdef int shape_and_reverse_word_c(
     return out_pos
 
 
-cdef str _reverse_arabic_word(str word, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
+cdef str _reverse_arabic_word(str word, bint shape=True, bint strip_tashkeel=True, bint allah_ligature=True):
     """Bridge for Python callers with single-call PyUnicode creation."""
     cdef Py_ssize_t length = len(word)
     if length == 0:
@@ -680,7 +680,7 @@ cdef bint _has_arabic_in_bracket(str line, Py_ssize_t i, Py_ssize_t length):
     return False
 
 
-cdef str _reverse_segment(str segment, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
+cdef str _reverse_segment(str segment, bint shape=True, bint strip_tashkeel=True, bint allah_ligature=True):
     """Reverse an Arabic segment preserving words, numbers, and mirroring brackets."""
     cdef Py_ssize_t length = len(segment)
     cdef Py_ssize_t i = 0
@@ -728,7 +728,7 @@ cdef str _reverse_segment(str segment, bint shape=True, bint strip_tashkeel=Fals
     return "".join(tokens)
 
 
-cdef str _process_line(str line, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
+cdef str _process_line(str line, bint smart_mode=True, bint shape=True, bint strip_tashkeel=True, bint allah_ligature=True):
     """Process a single line."""
     if not has_arabic(line):
         return line
@@ -845,7 +845,7 @@ cdef str _process_line(str line, bint smart_mode=True, bint shape=True, bint str
     return prefix + "".join(result)
 
 
-def process_text(str text, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
+def process_text(str text, bint smart_mode=True, bint shape=True, bint strip_tashkeel=True, bint allah_ligature=True):
     """
     Process Arabic prose for correct display in LTR terminals.
     If smart_mode is True, auto-skips code blocks, URLs, paths, commands.
@@ -881,7 +881,7 @@ def process_text(str text, bint smart_mode=True, bint shape=True, bint strip_tas
 reverse_arabic_text = process_text
 
 
-def process_batch(list texts, int num_threads=4, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
+def process_batch(list texts, int num_threads=4, bint smart_mode=True, bint shape=True, bint strip_tashkeel=True, bint allah_ligature=True):
     """Process multiple strings."""
     cdef Py_ssize_t n = len(texts)
     cdef list results = [None] * n
@@ -896,12 +896,12 @@ def _process_chunk(tuple args):
     cdef list chunk = args[0]
     cdef bint smart_mode = args[1]
     cdef bint shape = args[2] if len(args) > 2 else True
-    cdef bint strip_tashkeel = args[3] if len(args) > 3 else False
-    cdef bint allah_ligature = args[4] if len(args) > 4 else False
+    cdef bint strip_tashkeel = args[3] if len(args) > 3 else True
+    cdef bint allah_ligature = args[4] if len(args) > 4 else True
     return process_text('\n'.join(chunk), smart_mode=smart_mode, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature).split('\n')
 
 
-def process_text_parallel(str text, int num_threads=0, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
+def process_text_parallel(str text, int num_threads=0, bint smart_mode=True, bint shape=True, bint strip_tashkeel=True, bint allah_ligature=True):
     """
     Process text using multiprocessing.Pool (1BRC technique).
     """
@@ -932,7 +932,7 @@ def process_text_parallel(str text, int num_threads=0, bint smart_mode=True, bin
     return '\n'.join(out)
 
 
-def process_file_parallel(str filepath, int num_threads=0, str output=None, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False, bint show_stats=False):
+def process_file_parallel(str filepath, int num_threads=0, str output=None, bint smart_mode=True, bint shape=True, bint strip_tashkeel=True, bint allah_ligature=True, bint show_stats=False):
     """
     1BRC-style parallel file processing.
     """

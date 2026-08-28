@@ -96,19 +96,19 @@ def test_file_processing():
         f_path = f.name
 
     out_file = f_path + ".out"
+    out_file_py = f_path + ".py.out"
 
     try:
         arabic_rtl.process_file_parallel(f_path, num_threads=2, output=out_file)
         with open(out_file, 'r', encoding='utf-8') as f_out:
             content = f_out.read()
-        assert content == "ﻪﻠﻟﺍ ﺔﻤﺣﺭﻭ ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ\n" * 50
+        assert content == "ﷲ ﺔﻤﺣﺭﻭ ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ\n" * 50
 
         # Also test Python fallback file processing mmap
-        out_file_py = f_path + ".py.out"
         arabic_rtl_cli.py_process_file_mmap(f_path, num_threads=2, output=out_file_py)
         with open(out_file_py, 'r', encoding='utf-8') as f_out:
             content_py = f_out.read()
-        assert content_py == "ﻪﻠﻟﺍ ﺔﻤﺣﺭﻭ ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ\n" * 50
+        assert content_py == "ﷲ ﺔﻤﺣﺭﻭ ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ\n" * 50
     finally:
         if os.path.exists(f_path):
             os.remove(f_path)
@@ -204,8 +204,8 @@ def test_cli_no_args_help():
 def test_tashkeel_reversal():
     inp = "مَرْحَبًا"
     expected = "ﺎﺒًﺣَﺮْﻣَ"
-    assert arabic_rtl.process_text(inp) == expected
-    assert arabic_rtl_cli.py_process_text(inp) == expected
+    assert arabic_rtl.process_text(inp, strip_tashkeel=False, allah_ligature=False) == expected
+    assert arabic_rtl_cli.py_process_text(inp, strip_tashkeel=False, allah_ligature=False) == expected
 
 
 def test_numbers_preservation():
@@ -257,8 +257,8 @@ def test_windows_paths_skipping():
 def test_quranic_and_smart_brackets():
     inp = "﴿قُلْ هُوَ اللَّهُ أَحَدٌ﴾"
     expected = "﴿ﺪٌﺣَﺃَ ﻪُﻠَّﻟﺍ ﻮَﻫُ ﻞْﻗُ﴾"
-    assert arabic_rtl.process_text(inp) == expected
-    assert arabic_rtl_cli.py_process_text(inp) == expected
+    assert arabic_rtl.process_text(inp, strip_tashkeel=False, allah_ligature=False) == expected
+    assert arabic_rtl_cli.py_process_text(inp, strip_tashkeel=False, allah_ligature=False) == expected
 
     inp_quotes = "قال “السلام عليكم”"
     expected_quotes = "“ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ” ﻝﺎﻗ"

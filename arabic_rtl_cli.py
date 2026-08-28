@@ -285,7 +285,7 @@ def _py_render_unit(unit, strip_tashkeel=False):
     return unit.shaped_char
 
 
-def _py_reverse_arabic_word(word, shape=True, strip_tashkeel=False, allah_ligature=False):
+def _py_reverse_arabic_word(word, shape=True, strip_tashkeel=True, allah_ligature=True):
     """
     Reverse an Arabic word with contextual shaping (Presentation Forms-B)
     preserving Tashkeel (diacritics) on their base chars
@@ -475,7 +475,7 @@ def _has_arabic_in_bracket(line, i, length):
     return False
 
 
-def _py_reverse_segment(segment, shape=True, strip_tashkeel=False, allah_ligature=False):
+def _py_reverse_segment(segment, shape=True, strip_tashkeel=True, allah_ligature=True):
     """Reverse an Arabic segment preserving words, numbers, and mirroring brackets."""
     length = len(segment)
     i = 0
@@ -520,12 +520,13 @@ def _py_reverse_segment(segment, shape=True, strip_tashkeel=False, allah_ligatur
     return "".join(tokens)
 
 
-def py_process_line(line, smart_mode=True, shape=True, strip_tashkeel=False, allah_ligature=False):
-    """Process a single line in pure Python."""
+def py_process_line(line, smart_mode=True, shape=True, strip_tashkeel=True, allah_ligature=True):
+    """Process a single line."""
     if not py_has_arabic(line):
         return line
 
     prefix = ""
+
     if smart_mode:
         for pat in PREFIX_PATTERNS:
             m = pat.match(line)
@@ -628,7 +629,7 @@ def py_process_line(line, smart_mode=True, shape=True, strip_tashkeel=False, all
     return prefix + "".join(result)
 
 
-def py_process_text(text, smart_mode=True, shape=True, strip_tashkeel=False, allah_ligature=False):
+def py_process_text(text, smart_mode=True, shape=True, strip_tashkeel=True, allah_ligature=True):
     """Process Arabic text in pure Python."""
     lines = text.split('\n')
     out = []
@@ -658,24 +659,20 @@ py_reverse_arabic_text = py_process_text
 
 def _split_lines(lines, num_chunks, smart_mode=True):
     n = len(lines)
-    if n > 0 and num_chunks > n:
-        num_chunks = n
     if num_chunks <= 1 or n == 0:
         return [lines]
-    target_chunk_size = n // num_chunks
+
+    target_chunk_size = max(1, n // num_chunks)
     chunks = []
     start = 0
     in_code_block = False
 
     for i in range(n):
-        if smart_mode:
-            stripped = lines[i].strip()
-            if in_code_block:
-                if "```" in stripped:
-                    in_code_block = False
-            else:
-                if stripped.startswith("```") and stripped.count("```") % 2 != 0:
-                    in_code_block = True
+        line = lines[i]
+        if smart_mode and "```" in line:
+            if line.strip().startswith("```"):
+                if line.strip().count("```") % 2 != 0:
+                    in_code_block = not in_code_block
 
         if not in_code_block and (i - start + 1) >= target_chunk_size and len(chunks) < num_chunks - 1:
             chunks.append(lines[start:i + 1])
@@ -690,8 +687,8 @@ def _process_chunk(args):
     """Worker function for multiprocessing."""
     chunk, smart_mode = args[0], args[1]
     shape = args[2] if len(args) > 2 else True
-    strip_tashkeel = args[3] if len(args) > 3 else False
-    allah_ligature = args[4] if len(args) > 4 else False
+    strip_tashkeel = args[3] if len(args) > 3 else True
+    allah_ligature = args[4] if len(args) > 4 else True
     return py_process_text('\n'.join(chunk), smart_mode=smart_mode, shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature).split('\n')
 
 
@@ -748,7 +745,7 @@ def py_decide_process_count(text_or_lines, max_processes=None):
 py_get_optimal_process_count = py_decide_process_count
 
 
-def py_process_text_parallel(text, num_threads=0, smart_mode=True, shape=True, strip_tashkeel=False, allah_ligature=False):
+def py_process_text_parallel(text, num_threads=0, smart_mode=True, shape=True, strip_tashkeel=True, allah_ligature=True):
     """Process text using multiprocessing.Pool (bypasses GIL)."""
     if num_threads is None or num_threads <= 0:
         num_threads = py_decide_process_count(text)
@@ -777,7 +774,7 @@ def py_process_text_parallel(text, num_threads=0, smart_mode=True, shape=True, s
 
 
 # 1BRC Technique: mmap-based file reading
-def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True, shape=True, strip_tashkeel=False, allah_ligature=False, show_stats=False):
+def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True, shape=True, strip_tashkeel=True, allah_ligature=True, show_stats=False):
     """Process file using mmap (zero-copy file access)."""
     import time
     start = time.perf_counter()
@@ -1017,8 +1014,8 @@ def run_benchmark():
     # Correctness checks
     tests = [
         ("الحمد لله", "ﻪﻠﻟ ﺪﻤﺤﻟﺍ"),
-        ("السلام عليكم ورحمة الله", "ﻪﻠﻟﺍ ﺔﻤﺣﺭﻭ ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ"),
-        ("بسم الله الرحمن الرحيم", "ﻢﻴﺣﺮﻟﺍ ﻦﻤﺣﺮﻟﺍ ﻪﻠﻟﺍ ﻢﺴﺑ"),
+        ("السلام عليكم ورحمة الله", "ﷲ ﺔﻤﺣﺭﻭ ﻢﻜﻴﻠﻋ ﻡﻼﺴﻟﺍ"),
+        ("بسم الله الرحمن الرحيم", "ﻢﻴﺣﺮﻟﺍ ﻦﻤﺣﺮﻟﺍ ﷲ ﻢﺴﺑ"),
     ]
 
     print("  Correctness:")
