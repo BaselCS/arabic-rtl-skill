@@ -10,18 +10,17 @@ except ImportError:
 
 ext = ".pyx" if USE_CYTHON else ".c"
 
-# Compiler-specific tuning
+# Compiler-specific tuning (1BRC extreme performance)
 if sys.platform == 'win32':
-    extra_compile = ['/O2', '/LTCG']
-    extra_link = ['/LTCG']
+    extra_compile = ['/O2', '/LTCG', '/openmp', '/arch:AVX2']
+    extra_link = ['/LTCG', '/openmp']
 else:
-    extra_compile = ['-O3', '-ffast-math', '-flto', '-funroll-loops', '-fomit-frame-pointer', '-fno-exceptions']
-    extra_link = ['-O3', '-flto']
-
-if os.environ.get('ENABLE_NATIVE_TUNING') == '1':
-    if sys.platform != 'win32':
-        extra_compile.append('-march=native')
-        extra_link.append('-march=native')
+    extra_compile = [
+        '-O3', '-march=native', '-ffast-math', '-flto',
+        '-funroll-loops', '-fomit-frame-pointer', '-fno-exceptions',
+        '-fopenmp'
+    ]
+    extra_link = ['-O3', '-flto', '-fopenmp']
 
 extensions = [
     Extension(

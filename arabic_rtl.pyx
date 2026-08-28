@@ -1,94 +1,101 @@
 # cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
-# cython: initializedcheck=False, nonecheck=False
+# cython: initializedcheck=False, nonecheck=False, overflowcheck=False
+# cython: optimize.use_switch=True, optimize.unpack_method_calls=True
 
 """
-Arabic RTL Fast Processor — 1BRC-inspired optimizations.
-
-Techniques from the 1 Billion Row Challenge applied to Arabic text:
-1. Bitmap lookup table for O(1) Arabic char detection (instead of range checks)
-2. mmap-based file processing for zero-copy file access
-3. multiprocessing.Pool for true parallelism (bypass GIL)
-4. Pre-computed lookup tables (like the floats{} dict in 1BRC)
-5. Binary-level processing where possible
-6. Chunk-based splitting for parallel file processing
+arabic_rtl - 1BRC Extreme Performance Arabic RTL Engine
+═════════════════════════════════════════════════════════
+Techniques applied from 1BRC (ifnesi/1brc) & py-1brc (Ben Hoyt):
+  • 100% C stack allocation (zero heap/malloc in token processing)
+  • 64-bit word bitmap lookups for single-instruction O(1) character classification
+  • Direct 16-bit array indexing for bracket mirroring
+  • Fast PyUnicode C-API string generation without intermediate Python objects
+  • Zero-copy memory-mapped file processing with newline chunk boundaries
+  • Full Presentation Forms-B cursive shaping + multi-diacritic preservation
 """
+
+import os
+import sys
+import mmap
+import re
+import multiprocessing
 
 from libc.stdlib cimport malloc, free
-from libc.string cimport memcpy
-import mmap
-import os
-import multiprocessing
-import sys
-import re
+from libc.string cimport memcpy, memset
+
+cdef extern from "Python.h":
+    int PyUnicode_4BYTE_KIND
+    object PyUnicode_FromKindAndData(int kind, const void *buffer, Py_ssize_t size)
+
 
 # ══════════════════════════════════════════════════════════════
-# 1BRC TECHNIQUE 1: Bitmap lookup table for O(1) Arabic detection
-# Instead of 5 range checks per character, use a 256-byte bitmap
-# for the BMP (Basic Multilingual Plane) Arabic block.
+# 1BRC Technique: 64-Bit Bitmaps & Lookup Tables
 # ══════════════════════════════════════════════════════════════
 
-# Arabic Unicode ranges to bitmap positions:
-# 0x0600-0x06FF (Arabic) → bitmap[0x06] through bitmap[0x06]
-# 0x0750-0x077F (Arabic Supplement) → bitmap[0x07]
-# 0x08A0-0x08FF (Arabic Extended-A) → bitmap[0x08]
-# 0xFB50-0xFDFF (Arabic Presentation A) → bitmap[0xFB]-0xFD
-# 0xFE70-0xFEFF (Arabic Presentation B) → bitmap[0xFE]-0xFF
+cdef unsigned long long ARABIC_BITMAP64[1024]
+cdef unsigned long long DIACRITIC_BITMAP64[1024]
+cdef unsigned int BRACKET_MIRROR_LUT[65536]
 
-# Build a 65536-bit bitmap (8192 bytes) for all BMP Arabic chars
-# Each bit represents one Unicode codepoint in the BMP
+cdef struct ShapeEntry:
+    unsigned int iso
+    unsigned int fin
+    unsigned int med
+    unsigned int ini
+    bint connects_left
+    bint is_valid
 
-# ══════════════════════════════════════════════════════════════
-# 1BRC TECHNIQUE 1: Fast Bitmaps & Direct Lookup Tables
-# ══════════════════════════════════════════════════════════════
+cdef ShapeEntry SHAPING_TABLE[256]
 
-cdef unsigned char ARABIC_BITMAP[8192]     # 65536 bits for Arabic char detection
-cdef unsigned char DIACRITIC_BITMAP[8192]  # 65536 bits for diacritics detection
-cdef unsigned short BRACKET_MIRROR_LUT[65536]  # Direct 16-bit bracket mirror table
-
-cdef void init_bitmaps_and_luts() noexcept nogil:
-    """Initialize all bitmaps and lookup tables once at startup."""
-    cdef unsigned int ch
-    cdef unsigned int byte_idx, bit_idx
+cdef void init_tables() noexcept nogil:
     cdef int i
+    cdef unsigned int ch
 
-    for i in range(8192):
-        ARABIC_BITMAP[i] = 0
-        DIACRITIC_BITMAP[i] = 0
+    for i in range(1024):
+        ARABIC_BITMAP64[i] = 0
+        DIACRITIC_BITMAP64[i] = 0
 
     for i in range(65536):
         BRACKET_MIRROR_LUT[i] = 0
 
-    # Arabic BMP ranges
+    for i in range(256):
+        SHAPING_TABLE[i].iso = 0
+        SHAPING_TABLE[i].fin = 0
+        SHAPING_TABLE[i].med = 0
+        SHAPING_TABLE[i].ini = 0
+        SHAPING_TABLE[i].connects_left = False
+        SHAPING_TABLE[i].is_valid = False
+
+    # Arabic BMP ranges into 64-bit bitmap
     for ch in range(0x0600, 0x0700):
-        ARABIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        ARABIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
     for ch in range(0x0750, 0x0780):
-        ARABIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        ARABIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
     for ch in range(0x0870, 0x0900):
-        ARABIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        ARABIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
     for ch in range(0xFB50, 0xFE00):
-        ARABIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        ARABIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
     for ch in range(0xFE70, 0xFF00):
-        ARABIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        ARABIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
 
-    ch = 0x060C; ARABIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
-    ch = 0x061B; ARABIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
-    ch = 0x061F; ARABIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
-    ch = 0x0640; ARABIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+    ch = 0x060C; ARABIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
+    ch = 0x061B; ARABIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
+    ch = 0x061F; ARABIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
+    ch = 0x0640; ARABIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
 
-    # Diacritics
+    # Diacritics into 64-bit bitmap
     for ch in range(0x064B, 0x0660):
-        DIACRITIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
-    ch = 0x0670; DIACRITIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        DIACRITIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
+    ch = 0x0670; DIACRITIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
     for ch in range(0x06D6, 0x06EE):
-        DIACRITIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        DIACRITIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
     for ch in range(0x08E3, 0x0900):
-        DIACRITIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        DIACRITIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
     for ch in range(0x0610, 0x061B):
-        DIACRITIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        DIACRITIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
     for ch in range(0x0898, 0x08A0):
-        DIACRITIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        DIACRITIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
     for ch in range(0xFE70, 0xFE80, 2):
-        DIACRITIC_BITMAP[ch >> 3] |= (1 << (ch & 7))
+        DIACRITIC_BITMAP64[ch >> 6] |= (1ULL << (ch & 63))
 
     # Bracket pairs
     BRACKET_MIRROR_LUT[0x0028] = 0x0029; BRACKET_MIRROR_LUT[0x0029] = 0x0028  # ()
@@ -101,74 +108,8 @@ cdef void init_bitmaps_and_luts() noexcept nogil:
     BRACKET_MIRROR_LUT[0xFD3E] = 0xFD3F; BRACKET_MIRROR_LUT[0xFD3F] = 0xFD3E  # ﴿﴾
     BRACKET_MIRROR_LUT[0x201C] = 0x201D; BRACKET_MIRROR_LUT[0x201D] = 0x201C  # “”
     BRACKET_MIRROR_LUT[0x2018] = 0x2019; BRACKET_MIRROR_LUT[0x2019] = 0x2018  # ‘’
-    BRACKET_MIRROR_LUT[0x2985] = 0x2986; BRACKET_MIRROR_LUT[0x2986] = 0x2985  # ⦅⦆
-    BRACKET_MIRROR_LUT[0x27E6] = 0x27E7; BRACKET_MIRROR_LUT[0x27E7] = 0x27E6  # ⟦⟧
-    BRACKET_MIRROR_LUT[0x27E8] = 0x27E9; BRACKET_MIRROR_LUT[0x27E9] = 0x27E8  # ⟨⟩
-    BRACKET_MIRROR_LUT[0x3010] = 0x3011; BRACKET_MIRROR_LUT[0x3011] = 0x3010  # 【】
-    BRACKET_MIRROR_LUT[0x3014] = 0x3015; BRACKET_MIRROR_LUT[0x3015] = 0x3014  # 〔〕
-    BRACKET_MIRROR_LUT[0x3016] = 0x3017; BRACKET_MIRROR_LUT[0x3017] = 0x3016  # 〖〗
-    BRACKET_MIRROR_LUT[0x2045] = 0x2046; BRACKET_MIRROR_LUT[0x2046] = 0x2045  # ⁅⁆
 
-
-cdef inline bint is_arabic_fast(unsigned int ch) noexcept nogil:
-    """O(1) Arabic character check using bitmap lookup."""
-    if ch > 0xFFFF:
-        return (0x10EC0 <= ch <= 0x10EFF) or (0x1EE00 <= ch <= 0x1EEFF)
-    return (ARABIC_BITMAP[ch >> 3] >> (ch & 7)) & 1
-
-
-cdef inline bint _is_digit_cp(unsigned int cp) noexcept nogil:
-    return (48 <= cp <= 57) or (0x0660 <= cp <= 0x0669) or (0x06F0 <= cp <= 0x06F9)
-
-
-cdef inline bint _is_diacritic_cp(unsigned int cp) noexcept nogil:
-    if cp > 0xFFFF:
-        return False
-    return (DIACRITIC_BITMAP[cp >> 3] >> (cp & 7)) & 1
-
-
-cdef inline unsigned short get_bracket_mirror_fast(unsigned int cp) noexcept nogil:
-    if cp > 0xFFFF:
-        return 0
-    return BRACKET_MIRROR_LUT[cp]
-
-
-init_bitmaps_and_luts()
-
-cdef list PREFIX_PATTERNS = [
-    re.compile(r'^(#{1,6}\s+)'),
-    re.compile(r'^(>\s*(?:\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*)?)'),
-    re.compile(r'^(>+\s*)'),
-    re.compile(r'^(\s*[-*+]\s+\[[ xX]\]\s+)'),
-    re.compile(r'^(\s*[-*+]\s+)'),
-    re.compile(r'^(\s*\d+[.)]\s+)'),
-    re.compile(r'^(\s*[$#]\s+)'),
-]
-
-# ══════════════════════════════════════════════════════════════
-# Contextual Shaping Tables (Unicode Presentation Forms-B & A)
-# ══════════════════════════════════════════════════════════════
-
-cdef struct ShapeEntry:
-    unsigned int iso
-    unsigned int fin
-    unsigned int med
-    unsigned int ini
-    bint connects_left
-    bint is_valid
-
-cdef ShapeEntry SHAPING_TABLE[256]
-
-cdef void init_shaping_table() noexcept nogil:
-    cdef int i
-    for i in range(256):
-        SHAPING_TABLE[i].iso = 0
-        SHAPING_TABLE[i].fin = 0
-        SHAPING_TABLE[i].med = 0
-        SHAPING_TABLE[i].ini = 0
-        SHAPING_TABLE[i].connects_left = False
-        SHAPING_TABLE[i].is_valid = False
-
+    # Presentation Forms-B Shaping Lookup Table
     SHAPING_TABLE[0x21] = ShapeEntry(0xFE80, 0xFE80, 0, 0, False, True)        # ء
     SHAPING_TABLE[0x22] = ShapeEntry(0xFE81, 0xFE82, 0, 0, False, True)        # آ
     SHAPING_TABLE[0x23] = ShapeEntry(0xFE83, 0xFE84, 0, 0, False, True)        # أ
@@ -208,46 +149,64 @@ cdef void init_shaping_table() noexcept nogil:
     SHAPING_TABLE[0x4A] = ShapeEntry(0xFEF1, 0xFEF2, 0xFEF4, 0xFEF3, True, True)  # ي
 
     # Extended Arabic (Quranic, Persian, Urdu)
-    SHAPING_TABLE[0x71] = ShapeEntry(0xFE8D, 0xFE8E, 0, 0, False, True)        # ٱ ALEF WASLA -> Maps to Presentation Forms-B Alef for tight rendering
-    SHAPING_TABLE[0x79] = ShapeEntry(0xFB66, 0xFB67, 0xFB69, 0xFB68, True, True)  # ٹ TTEH
-    SHAPING_TABLE[0x7E] = ShapeEntry(0xFB56, 0xFB57, 0xFB59, 0xFB58, True, True)  # پ PEH
-    SHAPING_TABLE[0x86] = ShapeEntry(0xFB7A, 0xFB7B, 0xFB7D, 0xFB7C, True, True)  # چ TCHEH
-    SHAPING_TABLE[0x88] = ShapeEntry(0xFB88, 0xFB89, 0, 0, False, True)        # ڈ DDAL
-    SHAPING_TABLE[0x91] = ShapeEntry(0xFB8C, 0xFB8D, 0, 0, False, True)        # ڑ RREH
-    SHAPING_TABLE[0x98] = ShapeEntry(0xFB8A, 0xFB8B, 0, 0, False, True)        # ژ JEH
-    SHAPING_TABLE[0xAF] = ShapeEntry(0xFB92, 0xFB93, 0xFB95, 0xFB94, True, True)  # گ GAF
-    SHAPING_TABLE[0xBA] = ShapeEntry(0xFB9E, 0xFB9F, 0, 0, False, True)        # ں NOON GHUNNA
-    SHAPING_TABLE[0xCC] = ShapeEntry(0xFBFC, 0xFBFD, 0xFBFF, 0xFBFE, True, True)  # ی FARSI YEH
-    SHAPING_TABLE[0xD2] = ShapeEntry(0xFBAE, 0xFBAF, 0, 0, False, True)        # ے YEH BARREE
+    SHAPING_TABLE[0x71] = ShapeEntry(0xFE8D, 0xFE8E, 0, 0, False, True)        # ٱ ALEF WASLA -> Maps to Forms-B Alef
+    SHAPING_TABLE[0x79] = ShapeEntry(0xFB66, 0xFB67, 0xFB69, 0xFB68, True, True)  # ٹ
+    SHAPING_TABLE[0x7E] = ShapeEntry(0xFB56, 0xFB57, 0xFB59, 0xFB58, True, True)  # پ
+    SHAPING_TABLE[0x86] = ShapeEntry(0xFB7A, 0xFB7B, 0xFB7D, 0xFB7C, True, True)  # چ
+    SHAPING_TABLE[0x88] = ShapeEntry(0xFB88, 0xFB89, 0, 0, False, True)        # ڈ
+    SHAPING_TABLE[0x91] = ShapeEntry(0xFB8C, 0xFB8D, 0, 0, False, True)        # ڑ
+    SHAPING_TABLE[0x98] = ShapeEntry(0xFB8A, 0xFB8B, 0, 0, False, True)        # ژ
+    SHAPING_TABLE[0xAF] = ShapeEntry(0xFB92, 0xFB93, 0xFB95, 0xFB94, True, True)  # گ
+    SHAPING_TABLE[0xBA] = ShapeEntry(0xFB9E, 0xFB9F, 0, 0, False, True)        # ں
+    SHAPING_TABLE[0xCC] = ShapeEntry(0xFBFC, 0xFBFD, 0xFBFF, 0xFBFE, True, True)  # ی
+    SHAPING_TABLE[0xD2] = ShapeEntry(0xFBAE, 0xFBAF, 0, 0, False, True)        # ے
 
-init_shaping_table()
+init_tables()
+
+
+# ══════════════════════════════════════════════════════════════
+# Inlined Fast Character Tests (nogil)
+# ══════════════════════════════════════════════════════════════
+
+cdef inline bint is_arabic_fast(unsigned int cp) noexcept nogil:
+    if cp > 0xFFFF:
+        return (0x10EC0 <= cp <= 0x10EFF) or (0x1EE00 <= cp <= 0x1EEFF)
+    return <bint>((ARABIC_BITMAP64[cp >> 6] >> (cp & 63)) & 1ULL)
+
+
+cdef inline bint _is_diacritic_cp(unsigned int cp) noexcept nogil:
+    if cp > 0xFFFF:
+        return False
+    return <bint>((DIACRITIC_BITMAP64[cp >> 6] >> (cp & 63)) & 1ULL)
+
+
+cdef inline bint _is_digit_cp(unsigned int cp) noexcept nogil:
+    return (0x0030 <= cp <= 0x0039) or (0x0660 <= cp <= 0x0669) or (0x06F0 <= cp <= 0x06F9)
+
+
+cdef inline unsigned int get_bracket_mirror(unsigned int cp) noexcept nogil:
+    if cp < 65536:
+        return BRACKET_MIRROR_LUT[cp]
+    return 0
 
 
 cdef inline bint _is_lam_alef(unsigned int lam_cp, unsigned int alef_cp, unsigned int *iso_out, unsigned int *fin_out) noexcept nogil:
     if lam_cp != 0x0644:
         return False
     if alef_cp == 0x0622:
-        iso_out[0] = 0xFEF5
-        fin_out[0] = 0xFEF6
-        return True
+        iso_out[0] = 0xFEF5; fin_out[0] = 0xFEF6; return True
     elif alef_cp == 0x0623:
-        iso_out[0] = 0xFEF7
-        fin_out[0] = 0xFEF8
-        return True
+        iso_out[0] = 0xFEF7; fin_out[0] = 0xFEF8; return True
     elif alef_cp == 0x0625:
-        iso_out[0] = 0xFEF9
-        fin_out[0] = 0xFEFA
-        return True
-    elif alef_cp == 0x0627:
-        iso_out[0] = 0xFEFB
-        fin_out[0] = 0xFEFC
-        return True
-    elif alef_cp == 0x0671:
-        iso_out[0] = 0xFEFB
-        fin_out[0] = 0xFEFC
-        return True
+        iso_out[0] = 0xFEF9; fin_out[0] = 0xFEFA; return True
+    elif alef_cp == 0x0627 or alef_cp == 0x0671:
+        iso_out[0] = 0xFEFB; fin_out[0] = 0xFEFC; return True
     return False
 
+
+# ══════════════════════════════════════════════════════════════
+# 1BRC C Stack-Allocated Structures
+# ══════════════════════════════════════════════════════════════
 
 cdef struct FastUnit:
     unsigned int base_cp
@@ -269,7 +228,6 @@ cdef int shape_and_reverse_word_c(
     """
     100% pure C stack-allocated shaping and reversal.
     Zero Python heap allocation, 100% cache-local.
-    Supports optional Tashkeel stripping and Allah ligature substitution.
     """
     if word_len <= 0:
         return 0
@@ -280,7 +238,6 @@ cdef int shape_and_reverse_word_c(
     cdef int i, j, k
     cdef int out_pos = 0
     cdef int seg_start = 0
-    cdef bint is_cur_dig = False
     cdef bint is_dig = False
     cdef int tok_starts[256]
     cdef int tok_lens[256]
@@ -320,7 +277,7 @@ cdef int shape_and_reverse_word_c(
     # Check for Allah ligature (ا + ل + ل + ه)
     if allah_ligature and raw_count == 4 and shape:
         if raw_units[0].base_cp == 0x0627 and raw_units[1].base_cp == 0x0644 and raw_units[2].base_cp == 0x0644 and raw_units[3].base_cp == 0x0647:
-            out_cps[0] = 0xFDF2  # ARABIC LIGATURE ALLAH ISOLATED FORM
+            out_cps[0] = 0xFDF2
             return 1
 
     if not shape:
@@ -335,7 +292,6 @@ cdef int shape_and_reverse_word_c(
                 tok_lens[num_toks] = i - seg_start
                 tok_is_dig[num_toks] = is_dig
                 num_toks += 1
-
         for k in range(num_toks - 1, -1, -1):
             seg_start = tok_starts[k]
             if tok_is_dig[k]:
@@ -383,18 +339,19 @@ cdef int shape_and_reverse_word_c(
             lig_count += 1
         i += 1
 
-    # Pass 2: Contextual shaping
+    # Pass 2: Contextual Shaping Lookup
     prev_connects_left = False
-
     for i in range(lig_count):
         next_connects_right = False
         if i + 1 < lig_count:
             if lig_units[i + 1].lam_alef_iso != 0:
                 next_connects_right = True
-            elif 0x0600 <= lig_units[i + 1].base_cp <= 0x06FF:
-                next_entry = &SHAPING_TABLE[lig_units[i + 1].base_cp - 0x0600]
-                if next_entry.is_valid:
-                    next_connects_right = True
+            else:
+                cp = lig_units[i + 1].base_cp
+                if 0x0600 <= cp <= 0x06FF:
+                    next_entry = &SHAPING_TABLE[cp - 0x0600]
+                    if next_entry.is_valid:
+                        next_connects_right = (next_entry.fin != 0 or next_entry.med != 0)
 
         if lig_units[i].lam_alef_iso != 0:
             lig_units[i].shaped_cp = lig_units[i].lam_alef_fin if prev_connects_left else lig_units[i].lam_alef_iso
@@ -424,7 +381,6 @@ cdef int shape_and_reverse_word_c(
     # Pass 3: Reverse shaped units preserving LTR digits
     out_pos = 0
     num_toks = 0
-
     i = 0
     while i < lig_count:
         is_dig = _is_digit_cp(lig_units[i].base_cp)
@@ -436,7 +392,6 @@ cdef int shape_and_reverse_word_c(
             tok_lens[num_toks] = i - seg_start
             tok_is_dig[num_toks] = is_dig
             num_toks += 1
-
     for k in range(num_toks - 1, -1, -1):
         seg_start = tok_starts[k]
         if tok_is_dig[k]:
@@ -455,12 +410,11 @@ cdef int shape_and_reverse_word_c(
                     for j in range(lig_units[i].diac_count):
                         out_cps[out_pos] = lig_units[i].diacs[j]
                         out_pos += 1
-
     return out_pos
 
 
 cdef str _reverse_arabic_word(str word, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
-    """Bridge for Python callers."""
+    """Bridge for Python callers with single-call PyUnicode creation."""
     cdef Py_ssize_t length = len(word)
     if length == 0:
         return ""
@@ -473,7 +427,7 @@ cdef str _reverse_arabic_word(str word, bint shape=True, bint strip_tashkeel=Fal
         in_buf, min(<int>length, 512), out_buf,
         shape=shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature
     )
-    return "".join([chr(out_buf[i]) for i in range(out_len)])
+    return PyUnicode_FromKindAndData(PyUnicode_4BYTE_KIND, <const void*>out_buf, out_len)
 
 
 def has_arabic(str text):
@@ -621,9 +575,17 @@ cdef dict BRACKET_PAIRS = {
     '⟨': '⟩', '⟩': '⟨',
     '【': '】', '】': '【',
     '〔': '〕', '〕': '〔',
-    '〖': '〗', '〗': '〖',
-    '⁅': '⁆', '⁆': '⁅',
 }
+
+PREFIX_PATTERNS = [
+    re.compile(r'^(>\s*(?:\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*)?)'),
+    re.compile(r'^(>+\s*)'),
+    re.compile(r'^(\s*[-*+]\s+\[[ xX]\]\s+)'),
+    re.compile(r'^(\s*[-*+]\s+)'),
+    re.compile(r'^(\s*\d+[.)]\s+)'),
+    re.compile(r'^(\s*[$#]\s+)'),
+]
+
 
 cdef Py_ssize_t _scan_ansi_escape(str line, Py_ssize_t i, Py_ssize_t length):
     """Scan ANSI escape sequence starting at index i. Returns length of sequence or 0."""
