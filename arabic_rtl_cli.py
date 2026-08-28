@@ -777,8 +777,12 @@ def py_process_text_parallel(text, num_threads=0, smart_mode=True, shape=True, s
 
 
 # 1BRC Technique: mmap-based file reading
-def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True, shape=True, strip_tashkeel=False, allah_ligature=False):
+def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True, shape=True, strip_tashkeel=False, allah_ligature=False, show_stats=False):
     """Process file using mmap (zero-copy file access)."""
+    import time
+    start = time.perf_counter()
+    filepath = os.path.abspath(os.path.expanduser(filepath))
+
     if not os.path.exists(filepath):
         print(f"Error: File '{filepath}' not found.", file=sys.stderr)
         return ""
@@ -807,6 +811,8 @@ def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True, 
     else:
         result = py_process_text(text, smart_mode, shape, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature)
 
+    elapsed = time.perf_counter() - start
+
     if output:
         try:
             with open(output, 'w', encoding='utf-8') as f:
@@ -815,6 +821,14 @@ def py_process_file_mmap(filepath, num_threads=0, output=None, smart_mode=True, 
             print(f"Error: Could not write output file '{output}': {e}", file=sys.stderr)
     else:
         print(result)
+
+    if show_stats:
+        lines_count = text.count('\n') + 1
+        throughput = lines_count / elapsed if elapsed > 0 else 0
+        print(f"\n--- Processed {file_size/(1024*1024):.1f}MB | "
+              f"{lines_count} lines | {elapsed*1000:.1f}ms | "
+              f"{throughput:,.0f} lines/sec | {num_threads} processes ---",
+              file=sys.stderr)
 
     return result
 
@@ -923,7 +937,7 @@ def main():
     # File processing (1BRC-style mmap + parallel)
     if args.file:
         num_threads = max(1, min(32, args.threads)) if args.threads is not None else 0
-        result = do_process_file(args.file, num_threads, args.output, smart_mode=smart_mode, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature)
+        result = do_process_file(args.file, num_threads, args.output, smart_mode=smart_mode, shape=True, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature, show_stats=args.show_stats)
         return
 
     # Text input

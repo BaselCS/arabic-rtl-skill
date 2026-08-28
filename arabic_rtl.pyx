@@ -932,12 +932,13 @@ def process_text_parallel(str text, int num_threads=0, bint smart_mode=True, bin
     return '\n'.join(out)
 
 
-def process_file_parallel(str filepath, int num_threads=4, str output=None, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False):
+def process_file_parallel(str filepath, int num_threads=0, str output=None, bint smart_mode=True, bint shape=True, bint strip_tashkeel=False, bint allah_ligature=False, bint show_stats=False):
     """
     1BRC-style parallel file processing.
     """
     import time
     start = time.perf_counter()
+    filepath = os.path.abspath(os.path.expanduser(filepath))
 
     if not os.path.exists(filepath):
         print(f"Error: File '{filepath}' not found.", file=sys.stderr)
@@ -979,12 +980,13 @@ def process_file_parallel(str filepath, int num_threads=4, str output=None, bint
     else:
         print(result)
 
-    lines_count = text.count('\n') + 1
-    throughput = lines_count / elapsed if elapsed > 0 else 0
-    print(f"\n--- Processed {file_size/(1024*1024):.1f}MB | "
-          f"{lines_count} lines | {elapsed*1000:.1f}ms | "
-          f"{throughput:,.0f} lines/sec | {num_threads} processes ---",
-          file=sys.stderr)
+    if show_stats:
+        lines_count = text.count('\n') + 1
+        throughput = lines_count / elapsed if elapsed > 0 else 0
+        print(f"\n--- Processed {file_size/(1024*1024):.1f}MB | "
+              f"{lines_count} lines | {elapsed*1000:.1f}ms | "
+              f"{throughput:,.0f} lines/sec | {num_threads} processes ---",
+              file=sys.stderr)
 
     return result
 
