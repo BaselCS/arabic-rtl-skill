@@ -866,6 +866,12 @@ def _configure_std_streams():
             except Exception:
                 pass
 
+def clean_native_text(text, strip_tashkeel=True):
+    if not strip_tashkeel:
+        return text
+    return re.sub(r'[\u064B-\u065F\u0670\u06D6-\u06ED]', '', text)
+
+
 def main():
     _configure_std_streams()
     parser = argparse.ArgumentParser(
@@ -890,6 +896,10 @@ def main():
                         help='Disable dedicated Allah ligature (\uFDF2)')
     parser.add_argument('--allah-ligature', '-al', action='store_true',
                         help='Render Allah as single ligature (default behavior)')
+    parser.add_argument('--native', '-n', action='store_true',
+                        help='Output clean logical Arabic for native BiDi terminals (Ghostty/WezTerm/VSCode)')
+    parser.add_argument('--rtl', '-r', action='store_true',
+                        help='Force Presentation Forms-B reversal for dumb LTR terminals (Alacritty/Windows CMD)')
     parser.add_argument('--stream', '-S', action='store_true',
                         help='Process stdin line-by-line in real-time (for logs/tail -f)')
     parser.add_argument('--daemon', '-d', action='store_true',
@@ -906,14 +916,18 @@ def main():
     smart_mode = not args.no_smart
     strip_tashkeel = not args.keep_tashkeel
     allah_ligature = not args.no_allah_ligature
+    is_native = args.native
 
     # Stream mode: process line-by-line in real time
     if args.stream:
         for line in sys.stdin:
             if line.endswith('\n'):
-                sys.stdout.write(do_process_text(line[:-1], smart_mode=smart_mode, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature) + '\n')
+                line_content = line[:-1]
+                processed = clean_native_text(line_content, strip_tashkeel) if is_native else do_process_text(line_content, smart_mode=smart_mode, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature)
+                sys.stdout.write(processed + '\n')
             else:
-                sys.stdout.write(do_process_text(line, smart_mode=smart_mode, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature))
+                processed = clean_native_text(line, strip_tashkeel) if is_native else do_process_text(line, smart_mode=smart_mode, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature)
+                sys.stdout.write(processed)
             sys.stdout.flush()
         return
 
@@ -933,6 +947,21 @@ def main():
 
     # File processing (1BRC-style mmap + parallel)
     if args.file:
+        if is_native:
+            filepath = os.path.abspath(os.path.expanduser(args.file))
+            if not os.path.exists(filepath):
+                print(f"Error: File '{filepath}' not found.", file=sys.stderr)
+                return
+            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+            result = clean_native_text(content, strip_tashkeel)
+            if args.output:
+                with open(args.output, 'w', encoding='utf-8') as f:
+                    f.write(result)
+            else:
+                print(result)
+            return
+
         num_threads = max(1, min(32, args.threads)) if args.threads is not None else 0
         result = do_process_file(args.file, num_threads, args.output, smart_mode=smart_mode, shape=True, strip_tashkeel=strip_tashkeel, allah_ligature=allah_ligature, show_stats=args.show_stats)
         return
@@ -944,6 +973,15 @@ def main():
         text = sys.stdin.read()
     else:
         parser.print_help()
+        return
+
+    if is_native:
+        result = clean_native_text(text, strip_tashkeel)
+        if args.output:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                f.write(result)
+        elif text:
+            print(result)
         return
 
     if args.threads is not None and args.threads > 0:
